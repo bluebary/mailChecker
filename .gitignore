@@ -172,6 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+.env
+
+# configureFile
 Data/
 IMAP/
 POP3/
@@ -183,6 +186,6 @@ sampleData.csv
 whitelist.conf
 result.json
 LOGIN_Check.py
-chkeck.py
+check.py
 chroma_db/
-.env
+
