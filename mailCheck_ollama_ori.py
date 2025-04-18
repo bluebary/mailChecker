@@ -55,75 +55,8 @@ def convert_to_dict(csv):
         }
         rtn_dict[key] = rtn_data
     # 임시로 500개 데이터만
-    return dict(itertools.islice(rtn_dict.items(), 500))
-    # return rtn_dict
-
-# Mail Subject based spam detection
-def subject_group(df):
-    global collection
-    # 1. Grouping spam mail with the same subject
-    subject_groups = df.groupby('subject')
-    
-    # Filter only if there is more than one mail for each subject (only non-empty subjects)
-    subject_multiple = subject_groups.filter(lambda x: len(x) >= 2 and x['subject'].iloc[0] != '')
-    
-    # View results (sorted by subject)
-    subject_result = subject_multiple.sort_values('subject')
-    for row in subject_result.iterrows():
-        collection.add(
-            documents=[row['subject']],
-            metadatas=[{
-                "sender": row['sender'], 
-                "sender_domain": row['sender_domain'],
-                "is_spam": True}],
-            # hash the subject to create a unique ID for each spam email
-            ids=[f"spam-{hashlib.sha256(row['subject'].encode()).hexdigest()}"]
-        )
-
-# Mail Sender based spam detection
-def sender_group(df):
-    global collection
-    # Grouping spam mail with the same sender
-    sender_groups = df.groupby('sender')
-    
-    # Filter only if there is more than one mail for each sender
-    sender_multiple = sender_groups.filter(lambda x: len(x) >= 2)
-    
-    # View results (sorted by sender)
-    sender_result = sender_multiple.sort_values('sender')
-    # print(len(sender_result))
-    for idx, row in sender_result.iterrows():
-        collection.add(
-            documents=[row['subject']],
-            metadatas=[{
-                "sender": row['sender'], 
-                "sender_domain": row['sender_domain'],
-                "is_spam": True}],
-            # hash the subject to create a unique ID for each spam email
-            ids=[f"spam-{hashlib.sha256(row['subject'].encode()).hexdigest()}"]
-        )
-    
-# Mail Sender Domain based spam detection
-def sender_domain_group(df):
-    global collection
-    # Grouping spam mail with the same sender_domain
-    domain_groups = df.groupby('sender_domain')
-    
-    # Filter only if there is more than one mail for each domain
-    domain_multiple = domain_groups.filter(lambda x: len(x) >= 2)
-    
-    # View results (sorted by domain)
-    domain_result = domain_multiple.sort_values('sender_domain')
-    for idx, row in domain_result.iterrows():
-        collection.add(
-            documents=[row['subject']],
-            metadatas=[{
-                "sender": row['sender'], 
-                "sender_domain": row['sender_domain'],
-                "is_spam": True}],
-            # hash the subject to create a unique ID for each spam email
-            ids=[f"spam-{hashlib.sha256(row['subject'].encode()).hexdigest()}"]
-        )
+    # return dict(itertools.islice(rtn_dict.items(), 500))
+    return rtn_dict
 
 # Using the Ollama model to First check if the email is spam
 def ollama_Low_analysis():
@@ -143,31 +76,49 @@ def ollama_Low_analysis():
         bar = '█' * filled_length + '-' * (bar_length - filled_length)
         print(f"\r[{bar}] {chkCnt}/{allCount} ({percent:.1f}%)", end='', flush=True)
 
-# SpamMail Low level analysis by statistics and Save the ChromaDB
-def statistics_Data_Analysis():
-    global allData
-    df = pd.DataFrame.from_dict(allData, orient='index')
-    # sender_groups = df.groupby('sender')
-    sender_group(df)
-    sender_domain_group(df)
-    subject_group(df)
+def get_similar_emails(query_text, k=3):
+    # ChromaDB 컬렉션에서 직접 쿼리
+    results = collection.query(
+        query_texts=[query_text],
+        n_results=k
+    )
+    
+    # 결과를 문자열로 변환
+    context_str = ""
+    for i, doc in enumerate(results["documents"][0]):
+        metadata = results["metadatas"][0][i]
+        context_str += f"Email {i+1}:\n"
+        context_str += f"Subject: {doc}\n"
+        context_str += f"Sender: {metadata.get('sender', 'Unknown')}\n"
+        context_str += f"Domain: {metadata.get('sender_domain', 'Unknown')}\n"
+        context_str += f"Spam: {metadata.get('is_spam', False)}\n\n"
+    
+    return context_str
 
 # ollama model query to check if the email is spam
 def check_spam(data):
     global chain
-    message = f"Check if this email is spam and reply with only True or False, Sender: {data['sender']}, Recipient: {data['receiver']}, Subject: {data['subject']}"
+    
+    similar_emails = get_similar_emails(data['subject'])
+    message = f"""Use the following context from previous spam emails:
+    {similar_emails}
+
+    Determine whether the following email is spam:
+    Sender: {data['sender']}, Receiver: {data['receiver']}, Subject: {data['subject']}
+
+    If it is spam, respond with True; otherwise, respond with False.
+    """
     
     try:
         # LangChain's chain.run is deprecated, so use chain.invoke
-        # response = chain.run(message=message)
         response = chain.invoke({"message": message})
-               
+        
         # The response is assumed to be a True/False string, but it can be incorrect, so filter it with the
         response = response.strip()
         return True if "true" in response.lower() else False
     except Exception as e:
         print(f"Error in check_spam: {e}")
-        return False
+        return False   
 
 # Save the result to a JSON file
 def save_to_result(filename):
@@ -183,16 +134,13 @@ def mainProcess():
     print("3. Fist SLM Proccessing")
     ollama_Low_analysis()
     save_to_result("result_First.json")
-    
-    print("4. Statistics Analysis")
-    statistics_Data_Analysis()
-    
-    print("5. Second SLM Proccessing")
+       
+    print("4. Second SLM Proccessing")
     ollama_Low_analysis()  
     save_to_result("result_Second.json")
 
 def init():
-    global collection, client, embedding_function, llm, chain, allData   
+    global collection, client, embedding_function, llm, chain   
     # Initialize ChromaDB client and embedding function, Model is Linq-AI-Research/Linq-Embed-Mistral(https://huggingface.co/Linq-AI-Research/Linq-Embed-Mistral)
     print("1. Initialize ChromaDB client and embedding function")
     embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -204,18 +152,19 @@ def init():
     collection = client.get_or_create_collection(name="email_data")
     
     # llm Model is Ollama gemma3:12b (https://ollama.com/models/gemma3)
-    llm = OllamaLLM(model="gemma3:12b")
+    llm = OllamaLLM(model="gemma3:12b")           
     
-    # Default Template for spam detection
+    # Default Template for the LLMChain
     template = """You are an AI designed to detect spam emails.
     
+    The following are similar emails from our database:
     {message}
     
-    Is this email spam? Reply with only True or False."""
-    prompt = PromptTemplate(template=template, input_variables=["message"])
+    When making your decision, if you find identical or very similar email subjects in the retrieved examples, base your judgment on the most frequent classification (spam/not spam) among those similar examples. Always prioritize consistency for similar cases.
     
-    # Chain deprecation warning
-    # chain = LLMChain(llm=llm, prompt=prompt)
+    Is this email spam? Reply with only True or False."""
+    
+    prompt = PromptTemplate(template=template, input_variables=["message"])   
     chain = prompt | llm
     
 # Default arguments for the script
@@ -234,12 +183,8 @@ def parse_arguments():
     return args
 
 if __name__ == "__main__":   
-    read_file_convert_json('sampleData.csv')
     init()
-    
-    # 실제 오픈시 사용
-    # args = parse_arguments()
-    # read_file_convert_json(args.filename)
+    read_file_convert_json('sampleData.csv')
     mainProcess()
     
     

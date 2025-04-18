@@ -175,17 +175,9 @@ cython_debug/
 .env
 
 # configureFile
-Data/
-IMAP/
-POP3/
 file_Convert.py
-mailCheck_ollama_ktr.py
-result_First.json
-result_Second.json
 sampleData.csv
 whitelist.conf
-result.json
-LOGIN_Check.py
-check.py
-chroma_db/
+chroma_db/*
+chroma_db/chroma.sqlite3
 
