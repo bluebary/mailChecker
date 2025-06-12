@@ -179,5 +179,7 @@ file_Convert.py
 sampleData.csv
 whitelist.conf
 chroma_db/*
-chroma_db/chroma.sqlite3
-
+saveData/*
+mailData/*
+saveData.zip
+sampleData.zip
