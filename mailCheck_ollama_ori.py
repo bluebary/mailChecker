@@ -1,6 +1,8 @@
-import json, hashlib, os, chromadb, argparse, chromadb, csv, time, itertools
+import json, hashlib, os, chromadb, argparse, chromadb, csv, time, re
 import pandas as pd
 import requests
+from pathlib import Path
+from collections import defaultdict
 from chromadb.utils import embedding_functions
 from langchain_ollama import OllamaLLM
 from langchain.chains import LLMChain
@@ -184,79 +186,112 @@ def convert_to_dict(csv_data: list) -> dict:
     # return dict(itertools.islice(rtn_dict.items(), 500))
     return rtn_dict
 
+def list_json_convert_dict(file_path: str) -> dict:
+    """mail.json_list.json 파일을 읽어서 딕셔너리로 변환합니다.
+
+    Args:
+        file_path (str): mail.json_list.json 파일의 경로
+
+    Returns:
+        dict: 연도별 파일 목록과 총 파일 수를 포함하는 딕셔너리
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            print(f"Successfully read JSON list from: {file_path}")
+            print(f"Total files found: {data.get('total_files', 0)}")
+            return data
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error in {file_path}: {e}")
+        return {}
+    except Exception as e:
+        print(f"Error reading JSON file {file_path}: {e}")
+        return {}
+    
+def mail_json_convert_dict(file_path: str) -> dict:
+    """JSON 파일을 읽어서 지정된 데이터 구조의 딕셔너리로 변환합니다.
+
+    Args:
+        file_path (str): 변환할 JSON 파일의 절대 경로
+
+    Returns:
+        dict: 다음과 같은 구조의 데이터를 포함하는 딕셔너리:
+            {
+                "id": str,
+                "spam": bool,
+                "sender": str,
+                "sender_domain": str,
+                "receiver": str,
+                "subject": str,
+                "duration": float,
+                "reliability": float
+            }
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            
+        # 이메일 주소에서 도메인 추출
+        sender_domain = data.get('from', '').split('@')[-1] if '@' in data.get('from', '') else ''
+        
+        # 수신자 목록을 문자열로 변환
+        receivers = data.get('to', [])
+        receiver = ', '.join(receivers) if isinstance(receivers, list) else str(receivers)
+        
+        return {
+            "id": Path(file_path).stem,
+            "spam": False,  # 기본값
+            "sender": data.get('from', ''),
+            "sender_domain": sender_domain,
+            "receiver": receiver,
+            "subject": data.get('subject', ''),
+            "duration": 0.0,  # 기본값
+            "reliability": 0.0  # 기본값
+        }
+    except Exception as e:
+        print(f"JSON 파일 변환 중 오류 발생: {e}")
+        return {}
+
 # Using the Ollama model to First check if the email is spam
 def ollama_Low_analysis() -> None:
     """Ollama 모델을 사용하여 모든 이메일의 스팸 여부를 분석합니다.
-    
-    분석 결과는 전역 변수 allData에 저장되며, 진행 상황이 프로그레스 바로 표시됩니다.
+    1. list_json_convert_dict를 사용하여 mail_json_list.json파일을 읽어서 dict구조로 받아온 후 
+    2. files_by_year에서 연도별로 파일 목록을 읽어 mail_json_convert_dict를 통해 각각의 data struecture로 변경
+    3. 읽어온 데이터는 file_data 변수에 넣어 파일 처리 부분 진행 후 rstData에 연도별로 저장 
+    4. 진행 상황이 프로그레스 바로 표시
     """
-    root_path = "/home/sound/mailChecker/saveData"
-    
-    # 모든 파일 목록 생성
-    all_files = []
-    for year in sorted(os.listdir(root_path)):
-        year_path = os.path.join(root_path, year)
-        if not os.path.isdir(year_path):
-            continue
-            
-        for month in sorted(os.listdir(year_path)):
-            month_path = os.path.join(year_path, month)
-            if not os.path.isdir(month_path):
-                continue
-                
-            json_files = [f for f in os.listdir(month_path) if f.endswith('.json')]
-            for json_file in json_files:
-                file_path = os.path.join(month_path, json_file)
-                all_files.append((year, month, file_path))
-    
-    total_files = len(all_files)
-    if total_files == 0:
-        print("처리할 파일이 없습니다.")
-        return
+    rstData = defaultdict(list)
+    root_path = "/home/sound/mailChecker/mail_json_list.json"
         
-    print(f"\n총 {total_files}개의 파일을 처리합니다.")
+    file_list = list_json_convert_dict(root_path)
     
-    # 파일 처리
-    current_year = None
-    year_data = {}
-    
-    for idx, (year, month, file_path) in enumerate(all_files, 1):
-        # 연도가 바뀌면 이전 연도 데이터 처리
-        if current_year != year:
-            if current_year is not None:
-                allData = year_data
-                print(f"\n{current_year}년도 데이터 처리 완료: {len(year_data)}개 항목")
-            current_year = year
-            year_data = {}
-            print(f"\n처리 중인 연도: {year}")
+    for year, year_data in file_list['files_by_year'].items():
+        all_year_Count = year_data['count']
+        print(f"\n=== {year}년 === Proceessing")
+        print(f"파일 개수: {year_data['count']}")
         
-        # 프로그레스 바 표시
-        percent = idx / total_files * 100
-        bar_length = 40
-        filled_length = int(bar_length * idx // total_files)
-        bar = '█' * filled_length + '-' * (bar_length - filled_length)
-        print(f"\r[{bar}] {idx}/{total_files} ({percent:.1f}%) - {os.path.basename(file_path)}", end='', flush=True)
-        
-        # 파일 처리
-        file_data = read_json_file(file_path)
-        year_data.update(file_data)
-        
-        for key, item in allData.items():
-            chkCnt = chkCnt + 1
+        for i, file_path in enumerate(year_data['files'], 1):
+            # 파일 처리
+            file_data = mail_json_convert_dict(file_path)
             start_time = time.time()
-            rst_tmp = check_spam(item)
-            rst = rst_tmp.strip().split(',')[0]
+            rst_tmp = check_spam(file_data)
             end_time = time.time()
-            item["spam"] = rst
-            item["duration"] = round(end_time - start_time, 1)
-            item["reliability"] = float(rst_tmp.strip().split(',')) if len(rst_tmp.strip().split(',')) > 1 else 0.0
+            rst = rst_tmp.strip().split(',')[0]
+            rst_score = float(rst_tmp.strip().split(',')[1])
+            file_data["spam"] = rst
+            file_data["duration"] = round(end_time - start_time, 1)
+            file_data["reliability"] = rst_score  
 
-    
-    # 마지막 연도 데이터 처리
-    if current_year is not None:
-        allData = year_data
-        print(f"\n{current_year}년도 데이터 처리 완료: {len(year_data)}개 항목")
-
+            # result Data 저장
+            rstData[year].append(file_data)
+            
+            # progress bar 표시
+            progress = (i / all_year_Count) * 100
+            print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{all_year_Count})", end='')
+            
 def get_similar_emails(query_text: str, k: int = 3) -> str:
     """ChromaDB에서 주어진 쿼리와 유사한 이메일을 검색합니다.
 
@@ -310,6 +345,7 @@ def check_spam(data: dict) -> str:
     try:
         # LangChain's chain.run is deprecated, so use chain.invoke
         response = chain.invoke({"message": message})
+        response = re.sub(r'<think>.*?</think>\n*', '', response, flags=re.DOTALL)
         return response
     except Exception as e:
         print(f"Error in check_spam: {e}")
@@ -443,7 +479,6 @@ def mainProcess():
     global allData
     print("3. Fist SLM Proccessing")
     ollama_Low_analysis()
-    save_to_result("result_First.json")
        
     print("4. Second SLM Proccessing")
     ollama_Low_analysis()  
@@ -522,20 +557,21 @@ if __name__ == "__main__":
     init()
     
     args = parse_arguments()
+    mainProcess()
     
     # 파일명이 지정된 경우 CSV 처리
-    if args.filename and args.filename.endswith('.csv'):
-        print(f"\nCSV 파일 처리: {args.filename}")
-        read_file_convert_json(args.filename)
-    else:
-        # 파일명이 지정되지 않은 경우 saveData 폴더에서 JSON 파일 찾기
-        print("\n테스트 모드: saveData 폴더에서 첫 번째 JSON 파일 처리")
-        test_process_json()
+    # if args.filename and args.filename.endswith('.csv'):
+    #     print(f"\nCSV 파일 처리: {args.filename}")
+    #     read_file_convert_json(args.filename)
+    # else:
+    #     # 파일명이 지정되지 않은 경우 saveData 폴더에서 JSON 파일 찾기
+    #     print("\n테스트 모드: saveData 폴더에서 첫 번째 JSON 파일 처리")
+    #     test_process_json()
     
-    # 메인 프로세스 실행
-    if allData:
-        print("\n메인 프로세스 실행")
-        mainProcess()
-    else:
-        print("\n처리할 데이터가 없습니다. 프로그램을 종료합니다.")
+    # # 메인 프로세스 실행
+    # if allData:
+    #     print("\n메인 프로세스 실행")
+    #     mainProcess()
+    # else:
+    #     print("\n처리할 데이터가 없습니다. 프로그램을 종료합니다.")
 
