@@ -276,21 +276,22 @@ def ollama_Low_analysis() -> None:
         for i, file_path in enumerate(year_data['files'], 1):
             # 파일 처리
             file_data = mail_json_convert_dict(file_path)
-            start_time = time.time()
-            rst_tmp = check_spam(file_data)
-            end_time = time.time()
-            rst = rst_tmp.strip().split(',')[0]
-            rst_score = float(rst_tmp.strip().split(',')[1])
-            file_data["spam"] = rst
-            file_data["duration"] = round(end_time - start_time, 1)
-            file_data["reliability"] = rst_score  
+            if file_data is not None:
+                start_time = time.time()
+                rst_tmp = check_spam(file_data)
+                end_time = time.time()
+                rst = rst_tmp.strip().split(',')[0]
+                rst_score = float(rst_tmp.strip().split(',')[1])
+                file_data["spam"] = rst
+                file_data["duration"] = round(end_time - start_time, 1)
+                file_data["reliability"] = rst_score  
 
-            # result Data 저장
-            rstData[year].append(file_data)
-            
-            # progress bar 표시
-            progress = (i / all_year_Count) * 100
-            print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{all_year_Count})", end='')
+                # result Data 저장
+                rstData[year].append(file_data)
+                
+                # progress bar 표시
+                progress = (i / all_year_Count) * 100
+                print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{all_year_Count})", end='')
             
 def get_similar_emails(query_text: str, k: int = 3) -> str:
     """ChromaDB에서 주어진 쿼리와 유사한 이메일을 검색합니다.
@@ -303,22 +304,26 @@ def get_similar_emails(query_text: str, k: int = 3) -> str:
         str: 유사 이메일들의 정보를 포함한 문자열
     """
     # ChromaDB 컬렉션에서 직접 쿼리
-    results = collection.query(
-        query_texts=[query_text],
-        n_results=k
-    )
-    
-    # 결과를 문자열로 변환
-    context_str = ""
-    for i, doc in enumerate(results["documents"][0]):
-        metadata = results["metadatas"][0][i]
-        context_str += f"Email {i+1}:\n"
-        context_str += f"Subject: {doc}\n"
-        context_str += f"Sender: {metadata.get('sender', 'Unknown')}\n"
-        context_str += f"Domain: {metadata.get('sender_domain', 'Unknown')}\n"
-        context_str += f"Spam: {metadata.get('is_spam', False)}\n\n"
-    
-    return context_str
+    if query_text is not None:
+        print(query_text)
+        results = collection.query(
+            query_texts=[query_text],
+            n_results=k
+        )
+        
+        # 결과를 문자열로 변환
+        context_str = ""
+        for i, doc in enumerate(results["documents"][0]):
+            metadata = results["metadatas"][0][i]
+            context_str += f"Email {i+1}:\n"
+            context_str += f"Subject: {doc}\n"
+            context_str += f"Sender: {metadata.get('sender', 'Unknown')}\n"
+            context_str += f"Domain: {metadata.get('sender_domain', 'Unknown')}\n"
+            context_str += f"Spam: {metadata.get('is_spam', False)}\n\n"
+        
+        return context_str
+    else:
+        return None
 
 # ollama model query to check if the email is spam
 def check_spam(data: dict) -> str:
@@ -332,17 +337,16 @@ def check_spam(data: dict) -> str:
     """
     global chain
     
-    similar_emails = get_similar_emails(data['subject'])
-    message = f"""Similar emails:
-    {similar_emails}
-
-    Target email to classify:
-    Sender: {data['sender']}
-    Receiver: {data['receiver']}  
-    Subject: {data['subject']}
-    """
-    
     try:
+        similar_emails = get_similar_emails(data['subject'])
+        message = f"""Similar emails:
+        {similar_emails}
+
+        Target email to classify:
+        Sender: {data['sender']}
+        Receiver: {data['receiver']}  
+        Subject: {data['subject']}
+        """
         # LangChain's chain.run is deprecated, so use chain.invoke
         response = chain.invoke({"message": message})
         response = re.sub(r'<think>.*?</think>\n*', '', response, flags=re.DOTALL)
@@ -496,26 +500,31 @@ def init():
     client = chromadb.PersistentClient(path="./chroma_db_origin")
     # Check if the collection exists
     existing_collections = [col.name for col in client.list_collections()]
-    if "email_data" in existing_collections:
-        while True:
-            user_input = input("The 'email_data' collection already exists. Do you want to reset (delete and recreate) it? (y/N): ").strip().lower()
-            if user_input in ("y", "yes"):
-                client.delete_collection("email_data")
-                collection = client.get_or_create_collection(name="email_data")
-                print("Collection 'email_data' has been reset.")
-                break
-            elif user_input in ("n", "no", ""):
-                collection = client.get_or_create_collection(name="email_data")
-                print("Using existing 'email_data' collection.")
-                break
-            else:
-                print("Please enter 'y' or 'n'.")
-    else:
-        collection = client.get_or_create_collection(name="email_data")
+    
+    # 임시 코드(Collection Create)
+    collection = client.get_or_create_collection(name="email_data")
+    
+    # if "email_data" in existing_collections:
+    #     while True:
+    #         user_input = input("The 'email_data' collection already exists. Do you want to reset (delete and recreate) it? (y/N): ").strip().lower()
+    #         if user_input in ("y", "yes"):
+    #             client.delete_collection("email_data")
+    #             collection = client.get_or_create_collection(name="email_data")
+    #             print("Collection 'email_data' has been reset.")
+    #             break
+    #         elif user_input in ("n", "no", ""):
+    #             collection = client.get_or_create_collection(name="email_data")
+    #             print("Using existing 'email_data' collection.")
+    #             break
+    #         else:
+    #             print("Please enter 'y' or 'n'.")
+    # else:
+    #     collection = client.get_or_create_collection(name="email_data")
     
     # Let user choose Ollama model from installed models
-    print("2. 사용할 Ollama 모델 선택")
-    selected_model = choose_ollama_model()
+    # print("2. 사용할 Ollama 모델 선택")
+    # selected_model = choose_ollama_model()
+    selected_model = "qwen3:32b"
     
     # Initialize Ollama LLM with the selected model
     llm = OllamaLLM(model=selected_model)           
