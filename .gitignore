@@ -190,6 +190,7 @@ sampleData.zip
 =======
 chroma_db/chroma.sqlite3
 mailData/*
+saveData/*
 sampleData.zip
 email_converter.py
 .DS_Store
