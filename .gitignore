@@ -175,23 +175,19 @@ cython_debug/
 .env
 
 # configureFile
-file_Convert.py
-sampleData.csv
-whitelist.conf
 chroma_db/*
-<<<<<<< HEAD
-chroma_db_origin/chroma.sqlite3
+chroma_db_*/*
 saveData/*
 mailData/*
 logs/*
 results/*
-saveData.zip
-sampleData.zip
-=======
-chroma_db/chroma.sqlite3
-mailData/*
-saveData/*
-sampleData.zip
+tests/*
 email_converter.py
 .DS_Store
->>>>>>> 6c313691dba995cdb17785fd5f09107a04d161ee
+.gitignore
+file_list_to_json.py
+mail_json_list.json
+*.md
+db_sqlite_converter.py
+email_analysis.db
+query_all_results.py
