@@ -175,8 +175,7 @@ cython_debug/
 .env
 
 # configureFile
-chroma_db/*
-chroma_db_*/*
+vectorDB/*
 saveData/*
 mailData/*
 logs/*
@@ -186,8 +185,7 @@ email_converter.py
 .DS_Store
 .gitignore
 file_list_to_json.py
-mail_json_list.json
 *.md
-db_sqlite_converter.py
 email_analysis.db
 query_all_results.py
+mail_json_list.json
