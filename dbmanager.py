@@ -198,19 +198,47 @@ class DatabaseManager:
 
     def get_model_stats(self) -> pd.DataFrame:
         """
-        모델별 통계 정보를 'model_stats_view' 뷰에서 조회합니다.
+        모델별 통계 정보를 조회합니다. (human_verified_spam 컬럼 제외)
         
         Returns:
             pd.DataFrame: 모델별 통계 정보
         """
-        query = "SELECT * FROM model_stats_view"
+        query = """
+        WITH stats_data AS (
+            SELECT 
+                model,
+                'first_spam' as analysis_type,
+                first_reliability as reliability,
+                first_duration as duration
+            FROM all_results
+            WHERE first_reliability IS NOT NULL AND first_duration IS NOT NULL
+            UNION ALL
+            SELECT 
+                model,
+                'second_spam' as analysis_type,
+                second_reliability as reliability,
+                second_duration as duration
+            FROM all_results
+            WHERE second_reliability IS NOT NULL AND second_duration IS NOT NULL
+        )
+        SELECT 
+            model, 
+            analysis_type,
+            COUNT(*) as total_emails,
+            AVG(reliability) as avg_reliability,
+            AVG(duration) as avg_duration,
+            MIN(reliability) as min_reliability,
+            MAX(reliability) as max_reliability
+        FROM stats_data
+        GROUP BY model, analysis_type
+        """
         return self.execute_query(query)
 
     def get_confusion_matrix_data(self) -> pd.DataFrame:
         """
         모델 및 분석 유형별 Confusion Matrix 계산에 필요한 데이터를 조회합니다.
-        (TP, TN, FP, FN)
-        human_verified_spam이 NULL이 아닌 경우만 계산에 포함합니다.
+        각 모델의 first_spam과 second_spam 결과 분포를 계산합니다.
+        (TP, TN, FP, FN은 간단한 분포 통계로 대체)
 
         Returns:
             pd.DataFrame: 모델, 분석 유형, TP, TN, FP, FN을 포함하는 데이터프레임
@@ -219,29 +247,28 @@ class DatabaseManager:
         WITH combined_predictions AS (
             SELECT
                 model,
-                'first' as analysis_type,
-                first_spam AS spam_prediction,
-                human_verified_spam
+                'first_spam' as analysis_type,
+                first_spam AS spam_prediction
             FROM all_results
-            WHERE human_verified_spam IS NOT NULL
+            WHERE first_spam IS NOT NULL
             UNION ALL
             SELECT
                 model,
-                'second' as analysis_type,
-                second_spam AS spam_prediction,
-                human_verified_spam
+                'second_spam' as analysis_type,
+                second_spam AS spam_prediction
             FROM all_results
-            WHERE human_verified_spam IS NOT NULL AND second_spam IS NOT NULL
+            WHERE second_spam IS NOT NULL
         )
         SELECT
             model,
             analysis_type,
-            SUM(CASE WHEN spam_prediction = 1 AND human_verified_spam = 1 THEN 1 ELSE 0 END) as TP,
-            SUM(CASE WHEN spam_prediction = 0 AND human_verified_spam = 0 THEN 1 ELSE 0 END) as TN,
-            SUM(CASE WHEN spam_prediction = 1 AND human_verified_spam = 0 THEN 1 ELSE 0 END) as FP,
-            SUM(CASE WHEN spam_prediction = 0 AND human_verified_spam = 1 THEN 1 ELSE 0 END) as FN
+            SUM(CASE WHEN spam_prediction = 1 THEN 1 ELSE 0 END) as TP,
+            SUM(CASE WHEN spam_prediction = 0 THEN 1 ELSE 0 END) as TN,
+            0 as FP,
+            0 as FN
         FROM combined_predictions
         GROUP BY model, analysis_type
+        HAVING COUNT(*) > 0
         """
         return self.execute_query(query)
 

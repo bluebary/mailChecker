@@ -179,21 +179,33 @@ def display_dataframe(
             original_series = page_data['human_verified_spam'].apply(lambda x: None if pd.isna(x) else bool(x))
             edited_series = pd.Series(edited_df['human_verified_spam'], index=page_data.index)
             
-            changed_rows = original_series.compare(edited_series)
+            # 직접 비교를 통해 변경된 행 찾기
+            changed_mask = original_series != edited_series
+            changed_indices = changed_mask[changed_mask].index
 
-            if not changed_rows.empty:
-                # compare 결과에서 첫 번째 변경된 행의 인덱스를 가져옴
-                changed_idx = changed_rows.index[0]
+            if len(changed_indices) > 0:
+                # 첫 번째 변경된 행의 인덱스를 안전하게 가져옴
+                changed_idx = changed_indices[0]
                 
-                row_id = page_data.loc[changed_idx, 'id']
-                new_spam_status = edited_df.loc[changed_idx, 'human_verified_spam']
-                
-                # dbmanager의 새 메서드 호출
-                if db_manager.update_human_verification(row_id, new_spam_status):
-                    st.success(f"ID {row_id}의 스팸 상태가 '{new_spam_status}' (으)로 업데이트되었습니다.")
-                    st.rerun()
+                # 해당 인덱스가 page_data에 존재하는지 확인
+                if changed_idx in page_data.index:
+                    row_id = page_data.loc[changed_idx, 'id']
+                    
+                    # edited_df에서 해당 행의 위치를 찾기
+                    edited_row_position = page_data.index.get_loc(changed_idx)
+                    if edited_row_position < len(edited_df):
+                        new_spam_status = edited_df.iloc[edited_row_position]['human_verified_spam']
+                        
+                        # dbmanager의 새 메서드 호출
+                        if db_manager.update_human_verification(row_id, new_spam_status):
+                            st.success(f"ID {row_id}의 스팸 상태가 '{new_spam_status}' (으)로 업데이트되었습니다.")
+                            st.rerun()
+                        else:
+                            st.error(f"ID {row_id} 업데이트 실패")
+                    else:
+                        st.error("편집된 데이터에서 해당 행을 찾을 수 없습니다.")
                 else:
-                    st.error(f"ID {row_id} 업데이트 실패")
+                    st.error("변경된 행의 인덱스가 유효하지 않습니다.")
     else:
         # 표시할 데이터에서 'id' 컬럼 제외
         st.dataframe(page_data.drop(columns=['id'], errors='ignore'), hide_index=True)
@@ -235,100 +247,185 @@ def display_model_stats_visualizations(stats_data: pd.DataFrame, cm_data: pd.Dat
     with tab1:
         st.write("##### 모델별 이메일 분류 통계")
         if not stats_data.empty and 'model' in stats_data.columns:
-            analysis_types = stats_data['analysis_type'].unique()
+            # 모델별로 통합하여 차트 데이터 준비
+            model_summary = {}
+            for model in stats_data['model'].unique():
+                model_data = stats_data[stats_data['model'] == model]
+                model_summary[model] = {
+                    '평균 신뢰도': model_data['avg_reliability'].mean(),
+                    '평균 분석 시간': model_data['avg_duration'].mean(),
+                    '총 분석 건수': model_data['total_emails'].sum()
+                }
             
-            for analysis_type in analysis_types:
-                st.write(f"**{analysis_type.capitalize()} 분석**")
-                type_data = stats_data[stats_data['analysis_type'] == analysis_type]
-                
-                if not type_data.empty:
-                    chart_data = type_data.set_index('model')[['avg_reliability', 'avg_duration']]
-                    st.bar_chart(chart_data)
-                else:
-                    st.info(f"{analysis_type} 분석에 대한 데이터가 없습니다.")
+            summary_df = pd.DataFrame(model_summary).T
+            st.write("**모델별 통합 통계**")
+            st.bar_chart(summary_df[['평균 신뢰도', '평균 분석 시간']])
+            st.dataframe(summary_df.style.format({
+                '평균 신뢰도': '{:.3f}',
+                '평균 분석 시간': '{:.3f}',
+                '총 분석 건수': '{:.0f}'
+            }))
         else:
             st.info("모델 통계 데이터가 충분하지 않습니다.")
 
     with tab2:
-        st.write("##### 모델별 Confusion Matrix")
+        st.write("##### 모델별 통합 Confusion Matrix")
         if not cm_data.empty:
-            analysis_types = cm_data['analysis_type'].unique()
-            for analysis_type in analysis_types:
-                st.write(f"---")
-                st.subheader(f"{analysis_type.capitalize()} 분석")
-                type_cm_data = cm_data[cm_data['analysis_type'] == analysis_type]
-                
-                if not type_cm_data.empty:
-                    models = sorted(type_cm_data['model'].unique())
-                    
-                    num_columns = 3
-                    for i in range(0, len(models), num_columns):
-                        cols = st.columns(num_columns)
-                        for j in range(num_columns):
-                            model_idx = i + j
-                            if model_idx < len(models):
-                                model = models[model_idx]
-                                with cols[j]:
-                                    row = type_cm_data[type_cm_data['model'] == model].iloc[0]
-                                    cm = [[row['TN'], row['FP']], [row['FN'], row['TP']]]
-                                    
-                                    fig = ff.create_annotated_heatmap(
-                                        z=cm,
-                                        x=['Normal', 'Spam'],
-                                        y=['Actual Normal', 'Actual Spam'],
-                                        colorscale='Blues',
-                                        showscale=False
-                                    )
-                                    fig.update_layout(
-                                        width=250, height=250,
-                                        title=f"<b>{model}</b>",
-                                        margin=dict(t=40, l=10, r=10, b=10)
-                                    )
-                                    st.plotly_chart(fig)
-                else:
-                    st.info(f"{analysis_type} 분석에 대한 Confusion Matrix 데이터가 없습니다.")
+            # 모든 모델의 리스트 가져오기
+            models = sorted(cm_data['model'].unique())
+            
+            if models:
+                num_columns = 3
+                for i in range(0, len(models), num_columns):
+                    cols = st.columns(num_columns)
+                    for j in range(num_columns):
+                        model_idx = i + j
+                        if model_idx < len(models):
+                            model = models[model_idx]
+                            with cols[j]:
+                                st.subheader(f"{model}")
+                                
+                                # 해당 모델의 first_spam과 second_spam 데이터 가져오기
+                                model_data = cm_data[cm_data['model'] == model]
+                                first_spam_data = model_data[model_data['analysis_type'] == 'first_spam']
+                                second_spam_data = model_data[model_data['analysis_type'] == 'second_spam']
+                                
+                                if len(first_spam_data) == 0 and len(second_spam_data) == 0:
+                                    st.info(f"{model} 모델에 대한 데이터가 없습니다.")
+                                    continue
+                                
+                                # 통합 Confusion Matrix 생성
+                                total_tn = 0
+                                total_fp = 0
+                                total_fn = 0
+                                total_tp = 0
+                                
+                                analysis_labels = []
+                                
+                                if len(first_spam_data) > 0:
+                                    first_data = first_spam_data.iloc[0]
+                                    total_tn += first_data['TN']
+                                    total_fp += first_data['FP']
+                                    total_fn += first_data['FN']
+                                    total_tp += first_data['TP']
+                                    analysis_labels.append("1차")
+                                
+                                if len(second_spam_data) > 0:
+                                    second_data = second_spam_data.iloc[0]
+                                    total_tn += second_data['TN']
+                                    total_fp += second_data['FP']
+                                    total_fn += second_data['FN']
+                                    total_tp += second_data['TP']
+                                    analysis_labels.append("2차")
+                                
+                                # 통합된 Confusion Matrix
+                                cm_combined = [
+                                    [int(total_tn), int(total_fp)],
+                                    [int(total_fn), int(total_tp)]
+                                ]
+                                
+                                # 히트맵 생성
+                                fig = go.Figure(data=go.Heatmap(
+                                    z=cm_combined,
+                                    x=['예측: 정상', '예측: 스팸'],
+                                    y=['실제: 정상', '실제: 스팸'],
+                                    colorscale='Blues',
+                                    showscale=True,
+                                    text=[[f"{val}" for val in row] for row in cm_combined],
+                                    texttemplate="%{text}",
+                                    textfont={"size": 16}
+                                ))
+                                
+                                analysis_type_str = " + ".join(analysis_labels) if analysis_labels else "데이터 없음"
+                                fig.update_layout(
+                                    width=400, 
+                                    height=400,
+                                    title=f"<b>{model}</b><br><sub>({analysis_type_str} 분석 통합)</sub>",
+                                    margin=dict(t=60, l=10, r=10, b=10)
+                                )
+                                st.plotly_chart(fig, key=f"{model}_integrated_cm")
+                                
+                                # 통계 정보 표시
+                                total_samples = total_tn + total_fp + total_fn + total_tp
+                                if total_samples > 0:
+                                    accuracy = (total_tp + total_tn) / total_samples
+                                    st.write(f"**통합 정확도: {accuracy:.3f}**")
+                                    st.write(f"총 샘플 수: {total_samples}")
+            else:
+                st.info("Confusion Matrix를 생성할 데이터가 없습니다.")
         else:
-            st.info("Confusion Matrix를 생성할 데이터가 없습니다. (사용자 확인 데이터 필요)")
+            st.info("Confusion Matrix를 생성할 데이터가 없습니다.")
 
     with tab3:
-        st.write("##### 모델별 성능 지표 비교 (꺾은선 그래프)")
+        st.write("##### 모델별 성능 지표 통합 비교")
         if not cm_data.empty:
-            # 성능 지표 계산
-            cm_data['accuracy'] = (cm_data['TP'] + cm_data['TN']) / (cm_data['TP'] + cm_data['TN'] + cm_data['FP'] + cm_data['FN'])
-            cm_data['precision'] = cm_data['TP'] / (cm_data['TP'] + cm_data['FP'])
-            cm_data['recall'] = cm_data['TP'] / (cm_data['TP'] + cm_data['FN'])
-            cm_data['f1_score'] = 2 * (cm_data['precision'] * cm_data['recall']) / (cm_data['precision'] + cm_data['recall'])
-            cm_data.fillna(0, inplace=True)
-
-            analysis_types = cm_data['analysis_type'].unique()
-            for analysis_type in analysis_types:
-                st.write(f"**{analysis_type.capitalize()} 분석 성능**")
-                type_perf_data = cm_data[cm_data['analysis_type'] == analysis_type]
+            # 모델별로 성능 지표 통합 계산
+            model_performance = {}
+            
+            for model in cm_data['model'].unique():
+                model_data = cm_data[cm_data['model'] == model]
                 
-                if not type_perf_data.empty:
-                    chart_data = type_perf_data.set_index('model')[['accuracy', 'precision', 'recall', 'f1_score']]
+                # 모든 분석 타입의 결과를 통합
+                total_tn = model_data['TN'].sum()
+                total_fp = model_data['FP'].sum()
+                total_fn = model_data['FN'].sum()
+                total_tp = model_data['TP'].sum()
+                
+                # 성능 지표 계산
+                total_samples = total_tn + total_fp + total_fn + total_tp
+                if total_samples > 0:
+                    accuracy = (total_tp + total_tn) / total_samples
+                    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
+                    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+                    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
                     
-                    fig = go.Figure()
-                    for metric in chart_data.columns:
-                        fig.add_trace(go.Scatter(
-                            x=chart_data.index, 
-                            y=chart_data[metric],
-                            mode='lines+markers',
-                            name=metric
-                        ))
-                    
-                    fig.update_layout(
-                        title=f'{analysis_type.capitalize()} 분석 성능 지표',
-                        xaxis_title='모델',
-                        yaxis_title='점수',
-                        legend_title='성능 지표',
-                        height=400
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.dataframe(chart_data.style.format("{:.3f}"))
-                else:
-                    st.info(f"{analysis_type} 분석에 대한 성능 데이터가 없습니다.")
+                    model_performance[model] = {
+                        'accuracy': accuracy,
+                        'precision': precision,
+                        'recall': recall,
+                        'f1_score': f1_score
+                    }
+            
+            if model_performance:
+                perf_df = pd.DataFrame(model_performance).T
+                
+                # 성능 지표 꺾은선 그래프
+                fig = go.Figure()
+                colors = ['blue', 'red', 'green', 'orange']
+                
+                for i, metric in enumerate(perf_df.columns):
+                    fig.add_trace(go.Scatter(
+                        x=perf_df.index, 
+                        y=perf_df[metric],
+                        mode='lines+markers',
+                        name=metric.upper(),
+                        line=dict(color=colors[i % len(colors)], width=3),
+                        marker=dict(size=8)
+                    ))
+                
+                fig.update_layout(
+                    title='모델별 통합 성능 지표 비교',
+                    xaxis_title='모델',
+                    yaxis_title='성능 점수',
+                    legend_title='성능 지표',
+                    height=500,
+                    yaxis=dict(range=[0, 1])
+                )
+                st.plotly_chart(fig, use_container_width=True, key="integrated_performance")
+                
+                # 성능 지표 테이블
+                st.write("**모델별 통합 성능 지표**")
+                st.dataframe(perf_df.style.format("{:.3f}"))
+                
+                # 모델 순위
+                st.write("**모델 순위 (F1 Score 기준)**")
+                ranking = perf_df.sort_values('f1_score', ascending=False)
+                ranking_display = ranking[['f1_score']].copy()
+                ranking_display['순위'] = range(1, len(ranking_display) + 1)
+                ranking_display = ranking_display[['순위', 'f1_score']]
+                st.dataframe(ranking_display.style.format({'f1_score': '{:.3f}'}))
+            else:
+                st.info("성능 지표를 계산할 데이터가 없습니다.")
         else:
             st.info("성능 지표를 계산할 데이터가 없습니다.")
 
@@ -377,49 +474,179 @@ def display_results_visualizations(data: pd.DataFrame) -> None:
             comparison_df = comparison_df.reindex(ordered_categories)
 
             st.bar_chart(comparison_df)
-            
+
+            st.write("---")
+            st.write("##### Confusion Matrix (vs. 사용자 확인)")
+
+            if 'human_verified_spam' not in data.columns or data['human_verified_spam'].isnull().all():
+                st.info("사용자 확인 데이터가 없어 Confusion Matrix를 생성할 수 없습니다.")
+            else:
+                cm_data = data.dropna(subset=['human_verified_spam'])
+                
+                def create_cm_fig(pred_col, actual_col, title):
+                    """Confusion Matrix 플롯 생성"""
+                    if pred_col not in cm_data.columns:
+                        return None
+                    
+                    tn = ((cm_data[pred_col] == False) & (cm_data[actual_col] == False)).sum()
+                    fp = ((cm_data[pred_col] == True) & (cm_data[actual_col] == False)).sum()
+                    fn = ((cm_data[pred_col] == False) & (cm_data[actual_col] == True)).sum()
+                    tp = ((cm_data[pred_col] == True) & (cm_data[actual_col] == True)).sum()
+                    
+                    z = [[int(tn), int(fp)], [int(fn), int(tp)]]
+                    x = ['예측: 정상', '예측: 스팸']
+                    y = ['실제: 정상', '실제: 스팸']
+
+                    fig = ff.create_annotated_heatmap(
+                        z, x=x, y=y, colorscale='Blues', showscale=False
+                    )
+                    fig.update_layout(
+                        title_text=f'<b>{title}</b>',
+                        width=300, height=300,
+                        margin=dict(t=50, l=20, r=20, b=20)
+                    )
+                    return fig
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    fig1 = create_cm_fig('first_spam', 'human_verified_spam', '1차 분석')
+                    if fig1:
+                        st.plotly_chart(fig1, use_container_width=True, key="first_spam_cm")
+                    else:
+                        st.info("1차 분석 데이터가 없습니다.")
+                
+                with col2:
+                    fig2 = create_cm_fig('second_spam', 'human_verified_spam', '2차 분석')
+                    if fig2:
+                        st.plotly_chart(fig2, use_container_width=True, key="second_spam_cm")
+                    else:
+                        st.info("2차 분석 데이터가 없습니다.")
+
     with tab2:
-        st.write("##### 분석 신뢰도 및 시간 상호 비교")
+        st.write("##### 분석 신뢰도 및 시간 분포")
 
-        reliability_cols_map = {
-            'first_reliability': '1차 신뢰도',
-            'second_reliability': '2차 신뢰도'
-        }
-        duration_cols_map = {
-            'first_duration': '1차 분석 시간',
-            'second_duration': '2차 분석 시간'
-        }
+        reliability_cols = [col for col in ['first_reliability', 'second_reliability'] if col in data.columns]
+        duration_cols = [col for col in ['first_duration', 'second_duration'] if col in data.columns]
 
-        available_reliability_cols = [col for col in reliability_cols_map if col in data.columns]
-        available_duration_cols = [col for col in duration_cols_map if col in data.columns]
-
-        if not available_reliability_cols and not available_duration_cols:
-            st.info("분석 관련 컬럼이 없어 분포를 표시할 수 없습니다.")
+        if not reliability_cols and not duration_cols:
+            st.info("분석 신뢰도 또는 시간 데이터가 없어 분포를 표시할 수 없습니다.")
         else:
             col1, col2 = st.columns(2)
             with col1:
-                st.write("신뢰도(Reliability) 비교")
-                if available_reliability_cols:
-                    reliability_df = data[available_reliability_cols].rename(columns=reliability_cols_map)
-                    st.line_chart(reliability_df, height=250, use_container_width=True)
+                st.write("###### 신뢰도 분포 (Histogram)")
+                if reliability_cols:
+                    fig = go.Figure()
+                    for col in reliability_cols:
+                        fig.add_trace(go.Histogram(x=data[col], name=col, nbinsx=20, opacity=0.75))
+                    fig.update_layout(barmode='overlay', xaxis_title="신뢰도", yaxis_title="빈도")
+                    st.plotly_chart(fig, use_container_width=True, key="reliability_hist")
                 else:
                     st.info("신뢰도 데이터가 없습니다.")
-            
+
             with col2:
-                st.write("분석 시간(Duration) 비교")
-                if available_duration_cols:
-                    duration_df = data[available_duration_cols].rename(columns=duration_cols_map)
-                    st.line_chart(duration_df, height=250, use_container_width=True)
+                st.write("###### 분석 시간 분포 (Box Plot)")
+                if duration_cols:
+                    fig = go.Figure()
+                    for col in duration_cols:
+                        fig.add_trace(go.Box(y=data[col], name=col))
+                    fig.update_layout(yaxis_title="분석 시간 (초)")
+                    st.plotly_chart(fig, use_container_width=True, key="duration_box")
                 else:
                     st.info("분석 시간 데이터가 없습니다.")
+            
+            st.write("###### 신뢰도 vs. 분석 시간 (Scatter Plot)")
+            if reliability_cols and duration_cols:
+                # 1차, 2차 분석 데이터가 모두 있는 경우에만 산점도 표시
+                if 'first_reliability' in data.columns and 'first_duration' in data.columns:
+                    st.write("1차 분석")
+                    fig1 = go.Figure(data=go.Scatter(
+                        x=data['first_reliability'],
+                        y=data['first_duration'],
+                        mode='markers',
+                        marker=dict(opacity=0.6)
+                    ))
+                    fig1.update_layout(xaxis_title="신뢰도", yaxis_title="분석 시간 (초)")
+                    st.plotly_chart(fig1, use_container_width=True, key="first_scatter")
+
+                if 'second_reliability' in data.columns and 'second_duration' in data.columns:
+                    st.write("2차 분석")
+                    fig2 = go.Figure(data=go.Scatter(
+                        x=data['second_reliability'],
+                        y=data['second_duration'],
+                        mode='markers',
+                        marker=dict(opacity=0.6, color='red')
+                    ))
+                    fig2.update_layout(xaxis_title="신뢰도", yaxis_title="분석 시간 (초)")
+                    st.plotly_chart(fig2, use_container_width=True, key="second_scatter")
+            else:
+                st.info("신뢰도와 분석 시간 데이터가 모두 있어야 산점도를 표시할 수 있습니다.")
 
     with tab3:
-        st.write("##### 발신 도메인별 이메일 수 (상위 10)")
-        if 'sender_domain' in data.columns:
-            sender_counts = data['sender_domain'].value_counts().nlargest(10)
-            st.bar_chart(sender_counts)
+        st.write("##### 발신자 기반 분석")
+        if 'from_email' in data.columns:
+            # 상위 10개 발신자 도메인 추출
+            top_senders = data['from_email'].value_counts().nlargest(10).index.tolist()
+            filtered_data = data[data['from_email'].isin(top_senders)]
+
+            # 발신자 도메인별 스팸 분류 결과 비교
+            spam_comparison_cols = [col for col in ["first_spam", "second_spam", "human_verified_spam"] if col in filtered_data.columns]
+
+            if not spam_comparison_cols:
+                st.info("비교할 스팸 분류 컬럼이 없습니다.")
+            else:
+                sender_summary = {}
+                for sender in top_senders:
+                    sender_data = filtered_data[filtered_data['from_email'] == sender]
+                    sender_summary[sender] = {
+                        '스팸': sender_data['human_verified_spam'].eq(True).sum(),
+                        '정상': sender_data['human_verified_spam'].eq(False).sum(),
+                        '미확인': sender_data['human_verified_spam'].isnull().sum()
+                    }
+                
+                sender_comparison_df = pd.DataFrame(sender_summary).T
+                sender_comparison_df = sender_comparison_df.reindex(ordered_categories)
+
+                st.write("###### 발신자 도메인별 스팸 분류 결과")
+                st.bar_chart(sender_comparison_df)
+
+                # 발신자 도메인별 분석 신뢰도 및 시간
+                reliability_duration_cols = [col for col in ['first_reliability', 'second_reliability', 'first_duration', 'second_duration'] if col in filtered_data.columns]
+
+                if not reliability_duration_cols:
+                    st.info("신뢰도 또는 분석 시간 데이터가 없습니다.")
+                else:
+                    st.write("###### 발신자 도메인별 분석 신뢰도 및 시간")
+                    reliability_duration_df = filtered_data.groupby('from_email')[reliability_duration_cols].mean().reset_index()
+
+                    # 신뢰도 및 분석 시간 분포 시각화
+                    fig = go.Figure()
+
+                    for col in reliability_duration_cols:
+                        if 'reliability' in col:
+                            fig.add_trace(go.Box(
+                                x=reliability_duration_df[col],
+                                name=col,
+                                marker_color='green',
+                                boxmean='sd'
+                            ))
+                        else:
+                            fig.add_trace(go.Box(
+                                x=reliability_duration_df[col],
+                                name=col,
+                                marker_color='red',
+                                boxmean='sd'
+                            ))
+
+                    fig.update_layout(
+                        title="발신자 도메인별 분석 신뢰도 및 시간",
+                        xaxis_title="신뢰도 / 분석 시간",
+                        yaxis_title="값",
+                        legend_title="컬럼",
+                        height=500
+                    )
+                    st.plotly_chart(fig, use_container_width=True, key="sender_reliability_duration")
         else:
-            st.info("'sender_domain' 컬럼이 없어 발신자 분포를 표시할 수 없습니다.")
+            st.info("'from_email' 컬럼이 없어 발신자 기반 분석을 수행할 수 없습니다.")
 
 def main() -> None:
     """
@@ -444,6 +671,9 @@ def main() -> None:
                 is_editable = True
             elif selected_view == "모델별 통계":
                 data = db_manager.get_model_stats()
+                # 모델별 통계에서는 human_verified_spam 컬럼 제거
+                if 'human_verified_spam' in data.columns:
+                    data = data.drop(columns=['human_verified_spam'])
                 show_visuals = True  # 통계 뷰에서만 시각화 표시
             elif selected_view.endswith(" 결과"):
                 model_name = selected_view.replace(" 결과", "")
