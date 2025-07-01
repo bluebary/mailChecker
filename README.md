@@ -54,9 +54,9 @@ streamlit run app.py
 ```
 
 #### Windows
-'''cmd
+```cmd
 streamlit run app.py
-'''
+```
 
 실행 후 웹 브라우저에서 `http://localhost:8501`로 접속하면 대시보드를 이용할 수 있습니다.
 
