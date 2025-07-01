@@ -2,18 +2,43 @@ import streamlit as st
 import pandas as pd
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
+import logging
 from dbmanager import DatabaseManager
+
+# 로거 설정
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 파일 핸들러 설정
+file_handler = logging.FileHandler('streamlit.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+
+# 콘솔 핸들러 설정
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)
+
+# 포매터 설정
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# 핸들러 추가 (중복 방지)
+if not logger.handlers:
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 def setup_app() -> None:
     """
     애플리케이션 초기 설정
     """
+    logger.info("Streamlit 애플리케이션 초기 설정 시작")
     st.set_page_config(
         page_title="이메일 분석 대시보드",
         page_icon="📧",
         layout="wide"
     )
     st.title("📧 이메일 분석 대시보드")
+    logger.info("Streamlit 애플리케이션 초기 설정 완료")
 
 def setup_sidebar(db_manager: DatabaseManager) -> str:
     """
@@ -25,6 +50,7 @@ def setup_sidebar(db_manager: DatabaseManager) -> str:
     Returns:
         str: 선택된 뷰 이름
     """
+    logger.info("사이드바 설정 시작")
     st.sidebar.title("🔍 분석 뷰 선택")
     
     try:
@@ -38,7 +64,9 @@ def setup_sidebar(db_manager: DatabaseManager) -> str:
             "조회할 데이터를 선택하세요.",
             available_views
         )
+        logger.info(f"사용자가 뷰 선택: {selected_view}")
     except Exception as e:
+        logger.error(f"뷰 목록 불러오기 오류: {e}")
         st.sidebar.error(f"뷰 목록을 불러오는 중 오류가 발생했습니다: {e}")
         selected_view = None
 
@@ -197,10 +225,13 @@ def display_dataframe(
                         new_spam_status = edited_df.iloc[edited_row_position]['human_verified_spam']
                         
                         # dbmanager의 새 메서드 호출
+                        logger.info(f"사용자 데이터 편집 시도 - ID: {row_id}, 새 스팸 상태: {new_spam_status}")
                         if db_manager.update_human_verification(row_id, new_spam_status):
+                            logger.info(f"사용자 데이터 편집 성공 - ID: {row_id}")
                             st.success(f"ID {row_id}의 스팸 상태가 '{new_spam_status}' (으)로 업데이트되었습니다.")
                             st.rerun()
                         else:
+                            logger.error(f"사용자 데이터 편집 실패 - ID: {row_id}")
                             st.error(f"ID {row_id} 업데이트 실패")
                     else:
                         st.error("편집된 데이터에서 해당 행을 찾을 수 없습니다.")
@@ -652,6 +683,7 @@ def main() -> None:
     """
     메인 애플리케이션 함수
     """
+    logger.info("메인 애플리케이션 시작")
     setup_app()
     
     # 컨텍스트 관리자를 사용하여 DB 연결 관리
@@ -659,6 +691,7 @@ def main() -> None:
         selected_view = setup_sidebar(db_manager)
         
         if selected_view:
+            logger.info(f"선택된 뷰로 데이터 로드: {selected_view}")
             st.header(f"📊 {selected_view}")
             
             data = pd.DataFrame()
@@ -667,18 +700,24 @@ def main() -> None:
 
             # 선택된 뷰에 따라 데이터 로드
             if selected_view == "모든 결과":
+                logger.info("모든 결과 데이터 로드 중")
                 data = db_manager.get_all_results()
                 is_editable = True
+                logger.info(f"모든 결과 데이터 로드 완료 - 행 수: {len(data)}")
             elif selected_view == "모델별 통계":
+                logger.info("모델별 통계 데이터 로드 중")
                 data = db_manager.get_model_stats()
                 # 모델별 통계에서는 human_verified_spam 컬럼 제거
                 if 'human_verified_spam' in data.columns:
                     data = data.drop(columns=['human_verified_spam'])
                 show_visuals = True  # 통계 뷰에서만 시각화 표시
+                logger.info(f"모델별 통계 데이터 로드 완료 - 행 수: {len(data)}")
             elif selected_view.endswith(" 결과"):
                 model_name = selected_view.replace(" 결과", "")
+                logger.info(f"특정 모델 결과 데이터 로드 중: {model_name}")
                 data = db_manager.get_model_results(model_name)
                 is_editable = True
+                logger.info(f"모델 {model_name} 결과 데이터 로드 완료 - 행 수: {len(data)}")
             
             # first_spam, second_spam 컬럼을 1/0에서 True/False로 변환
             spam_map = {1: True, 0: False, 1.0: True, 0.0: False}
@@ -686,14 +725,19 @@ def main() -> None:
                 data["first_spam"] = data["first_spam"].map(spam_map).astype("boolean")
             if "second_spam" in data.columns:
                 data["second_spam"] = data["second_spam"].map(spam_map).astype("boolean")
-
+            
+            logger.info("데이터 변환 완료, UI 렌더링 시작")
             # 데이터프레임 표시 및 편집 UI
             display_dataframe(db_manager, data, is_editable, selected_view)
             
             # 시각화 표시
             if show_visuals:
+                logger.info("데이터 시각화 렌더링 시작")
                 st.markdown("---")
                 display_visualizations(db_manager, data, selected_view)
+                logger.info("데이터 시각화 렌더링 완료")
+        else:
+            logger.warning("선택된 뷰가 없음")
 
 if __name__ == "__main__":
     main()

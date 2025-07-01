@@ -1,6 +1,29 @@
 import sqlite3
 import pandas as pd
+import logging
 from typing import List, Tuple, Any, Optional
+
+# 로거 설정
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 파일 핸들러 설정
+file_handler = logging.FileHandler('dbmanager.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+
+# 콘솔 핸들러 설정
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)
+
+# 포매터 설정
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# 핸들러 추가 (중복 방지)
+if not logger.handlers:
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 class DatabaseManager:
     """SQLite 데이터베이스 연결 및 쿼리 관리 클래스"""
@@ -14,16 +37,20 @@ class DatabaseManager:
         """
         self.db_path = db_path
         self.connection: Optional[sqlite3.Connection] = None
+        logger.info(f"DatabaseManager 초기화됨 - DB 경로: {db_path}")
 
     def connect(self) -> None:
         """
         데이터베이스 연결 설정
         """
         if self.connection:
+            logger.debug("데이터베이스 연결이 이미 존재함")
             return
         try:
             self.connection = sqlite3.connect(self.db_path)
+            logger.info(f"데이터베이스 연결 성공: {self.db_path}")
         except sqlite3.Error as e:
+            logger.error(f"데이터베이스 연결 오류: {e}")
             print(f"데이터베이스 연결 오류: {e}")
             self.connection = None
 
@@ -34,6 +61,7 @@ class DatabaseManager:
         if self.connection:
             self.connection.close()
             self.connection = None
+            logger.info("데이터베이스 연결 해제됨")
 
     def __enter__(self) -> 'DatabaseManager':
         """컨텍스트 관리자 진입"""
@@ -121,12 +149,15 @@ class DatabaseManager:
         Returns:
             bool: 업데이트 성공 여부
         """
+        logger.info(f"사용자 스팸 검증 업데이트 시작 - ID: {email_id}, 스팸 여부: {is_spam}")
+        
         if not self.connection:
             self.connect()
         
         try:
             model_names = self.get_model_names()
         except Exception as e:
+            logger.error(f"모델 이름 조회 중 오류: {e}")
             print(f"모델 이름 조회 중 오류: {e}")
             return False
 
@@ -145,8 +176,10 @@ class DatabaseManager:
                 cursor.execute(query_model, (is_spam, email_id))
             
             self.connection.commit()
+            logger.info(f"사용자 스팸 검증 업데이트 성공 - ID: {email_id}")
             return True
         except sqlite3.Error as e:
+            logger.error(f"스팸 플래그 업데이트 오류: {e}")
             print(f"스팸 플래그 업데이트 오류: {e}")
             if self.connection:
                 self.connection.rollback()
@@ -283,11 +316,15 @@ class DatabaseManager:
         Returns:
             pd.DataFrame: 쿼리 결과를 담은 DataFrame
         """
+        logger.debug(f"쿼리 실행 시작: {query[:100]}..." if len(query) > 100 else f"쿼리 실행 시작: {query}")
+        
         if not self.connection:
             self.connect()
         try:
             df = pd.read_sql_query(query, self.connection, params=params)
+            logger.info(f"쿼리 실행 성공 - 결과 행 수: {len(df)}")
             return df
         except Exception as e:
+            logger.error(f"쿼리 실행 오류: {e}")
             print(f"쿼리 실행 오류: {e}")
             return pd.DataFrame()

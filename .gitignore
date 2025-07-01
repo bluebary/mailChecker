@@ -186,6 +186,5 @@ email_converter.py
 .gitignore
 file_list_to_json.py
 *.md
-email_analysis.db
 query_all_results.py
 mail_json_list.json
