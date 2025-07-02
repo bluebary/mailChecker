@@ -1,10 +1,12 @@
 import json, os, chromadb, time, re, requests, logging, datetime, traceback
+from typing import List, Union
 from pathlib import Path
 from collections import defaultdict
 from chromadb.utils import embedding_functions
 from langchain_ollama import OllamaLLM
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
+from ollama._types import ResponseError
 
 """
 이메일 스팸 검사 시스템
@@ -230,13 +232,12 @@ def mail_json_convert_dict(file_path: str) -> dict:
         print(f"JSON 파일 변환 중 오류 발생: {e}")
         return {}
 
-def ollama_low_analysis() -> None:
+def ollama_low_analysis() -> dict:
     """Ollama 모델을 사용하여 모든 이메일의 스팸 여부를 분석합니다.
     
     mail_json_list.json 파일에서 이메일 목록을 읽어와 각 이메일을 분석하고,
-    결과를 연도별로 정리하여 저장합니다.
+    결과를 연도별로 정리하여 반환합니다.
     """
-    logger.info("이메일 스팸 분석 시작")
     result_data = defaultdict(list)
     root_path = "/home/sound/mailChecker/mail_json_list.json"
         
@@ -251,56 +252,46 @@ def ollama_low_analysis() -> None:
     
     for year, year_data in file_list['files_by_year'].items():
         # 임시로 2000년대만 처리
-        # if year == '2004':
-        total_year_count = year_data['count']
-        logger.info(f"{year}년 데이터 처리 시작 (총 {total_year_count}개 파일)")
-        print(f"\n=== {year}년 처리 중 ===")
-        print(f"파일 개수: {total_year_count}")
-        
-        processed_year_count = 0
-        for i, file_path in enumerate(year_data['files'], 1):
-            try:
-                # 파일 처리
-                file_data = mail_json_convert_dict(file_path)
-                if not file_data:
-                    logger.warning(f"파일을 처리할 수 없습니다: {file_path}")
+        if year == '2004':
+            total_year_count = year_data['count']
+            logger.info(f"{year}년 데이터 처리 시작 (총 {total_year_count}개 파일)")
+            print(f"\n=== {year}년 처리 중 ===")
+            print(f"파일 개수: {total_year_count}")
+            
+            processed_year_count = 0
+            for i, file_path in enumerate(year_data['files'], 1):
+                try:
+                    # 파일 처리
+                    file_data = mail_json_convert_dict(file_path)
+                    if not file_data:
+                        logger.warning(f"파일을 처리할 수 없습니다: {file_path}")
+                        continue
+                    
+                    # 스팸 분석
+                    start_time = time.time()
+                    is_spam, reliability_score = check_spam(file_data)
+                    end_time = time.time()
+                    processing_time = round(end_time - start_time, 1)
+                    
+                    # 데이터 업데이트
+                    file_data["spam"] = is_spam
+                    file_data["duration"] = processing_time
+                    file_data["reliability"] = reliability_score
+
+                    # 결과 데이터 저장
+                    result_data[year].append(file_data)
+                    processed_year_count += 1
+                    total_processed += 1
+                    
+                    # 진행 상황 표시
+                    # progress = (i / total_year_count) * 100
+                    # print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{total_year_count})", end='')
+                
+                except Exception as e:
+                    log_exception(e, f"파일 처리 중 오류 발생: {file_path}")
                     continue
                 
-                # 스팸 분석
-                start_time = time.time()
-                result_tmp = check_spam(file_data)
-                end_time = time.time()
-                processing_time = round(end_time - start_time, 1)
-                
-                # 결과 파싱
-                try:
-                    result_parts = result_tmp.strip().split(',')
-                    is_spam = result_parts[0].lower() == 'true'
-                    reliability_score = float(result_parts[1]) if len(result_parts) > 1 else 0.0
-                except (ValueError, IndexError) as e:
-                    logger.warning(f"결과 파싱 오류: {e}, 원본 결과: {result_tmp}")
-                    is_spam = False
-                    reliability_score = 0.0
-                
-                # 데이터 업데이트
-                file_data["spam"] = is_spam
-                file_data["duration"] = processing_time
-                file_data["reliability"] = reliability_score
-
-                # 결과 데이터 저장
-                result_data[year].append(file_data)
-                processed_year_count += 1
-                total_processed += 1
-                
-                # 진행 상황 표시
-                # progress = (i / total_year_count) * 100
-                # print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{total_year_count})", end='')
-            
-            except Exception as e:
-                log_exception(e, f"파일 처리 중 오류 발생: {file_path}")
-                continue
-            
-            logger.info(f"{year}년 데이터 처리 완료: {processed_year_count}/{total_year_count} 파일 처리됨")    
+                logger.info(f"{year}년 데이터 처리 완료: {processed_year_count}/{total_year_count} 파일 처리됨, 처리시간: {processing_time}초")    
     
     # 처리 완료 메시지
     logger.info(f"모든 이메일 분석이 완료되었습니다. 총 {total_processed}/{total_files} 파일 처리됨")
@@ -348,16 +339,19 @@ def get_similar_emails(query_text: str, k: int = 3) -> str:
         log_exception(e, "유사 이메일 검색 중 오류 발생")
         return "유사 이메일 검색 중 오류가 발생했습니다."
 
-def check_spam(data: dict) -> str:
-    """이메일의 스팸 여부를 Ollama 모델을 사용하여 확인합니다.
+def check_spam(data: dict) -> List[Union[bool, float]]:
+    """이메일의 스팸 여부를 Ollama 모델을 사용하여 확인하고 파싱합니다.
 
     Args:
         data (dict): 분석할 이메일 데이터
 
     Returns:
-        str: 스팸 여부와 신뢰도 점수를 포함한 문자열 (예: "True,85" 또는 "False,92")
+        List[Union[bool, float]]: 스팸 여부(bool)와 신뢰도 점수(float)를 담은 리스트 (예: [True, 85.2]).
+                                  실패 시 [False, 0.0]을 반환합니다.
     """
     global chain
+    max_retries: int = 3
+    retry_delay: int = 5  # 재시도 전 대기 시간(초)
     
     try:
         similar_emails = get_similar_emails(data['subject'])
@@ -371,18 +365,56 @@ def check_spam(data: dict) -> str:
         Subject: {data['subject']}
         """
         
-        # LangChain 체인 사용
-        response = chain.invoke({"message": message})
+        for attempt in range(max_retries):
+            try:
+                # 1. LLM 호출
+                response_str = chain.invoke({"message": message})
+                
+                # 2. 응답 파싱
+                cleaned_response = re.sub(r'<think>.*?</think>\n*', '', response_str, flags=re.DOTALL).strip()
+                parts = cleaned_response.split(',')
+
+                if len(parts) != 2:
+                    raise ValueError(f"응답 형식이 잘못되었습니다: '{cleaned_response}'")
+
+                is_spam_str = parts[0].strip().lower()
+                if is_spam_str == "true":
+                    is_spam = True
+                elif is_spam_str == "false":
+                    is_spam = False
+                else:
+                    raise ValueError(f"스팸 여부 파싱 실패: '{is_spam_str}'")
+                reliability = float(parts[1].strip())
+
+                return [is_spam, reliability]
+
+            except Exception as e:
+                is_ollama_500_error = isinstance(e, ResponseError) and "status code: 500" in str(e)
+                
+                if attempt < max_retries - 1:
+                    error_type = "Ollama 500 오류" if is_ollama_500_error else "파싱 또는 API 오류"
+                    logger.warning(
+                        f"{error_type} 발생, {retry_delay}초 후 재시도... "
+                        f"({attempt + 1}/{max_retries}) (ID: {data.get('id', 'N/A')}) - 오류: {e}"
+                    )
+                    print(
+                        f"{error_type} 발생, {retry_delay}초 후 재시도... "
+                        f"({attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    # 마지막 시도에서는 오류를 기록하고 루프를 중단
+                    log_exception(e, f"최대 재시도({max_retries}) 후에도 스팸 확인 실패: {data.get('id', '알 수 없음')}")
+                    print(f"최대 재시도 후에도 스팸 확인에 실패했습니다: {e}")
+                    break  # 루프 중단
         
-        # 모델의 사고 과정을 제거 (<think> 태그 내용 삭제)
-        response = re.sub(r'<think>.*?</think>\n*', '', response, flags=re.DOTALL)
-        
-        logger.debug(f"스팸 분석 결과: {response} (이메일 ID: {data['id']})")
-        return response
     except Exception as e:
-        log_exception(e, f"스팸 확인 중 오류 발생: {data.get('id', '알 수 없음')}")
-        print(f"스팸 확인 중 오류 발생: {e}")
-        return "False,0"
+        # get_similar_emails 등 루프 외부에서 발생한 예외 처리
+        log_exception(e, f"스팸 확인 준비 중 오류 발생: {data.get('id', '알 수 없음')}")
+        print(f"스팸 확인 준비 중 오류가 발생했습니다: {e}")
+
+    # 모든 재시도 실패 또는 준비 과정에서 오류 발생 시 기본값 반환
+    return [False, 0.0]
 
 def save_result(result_data: dict, filename: str) -> None:
     """분석 결과를 JSON 파일로 저장합니다.
@@ -427,19 +459,18 @@ def save_result(result_data: dict, filename: str) -> None:
         print(f"결과 저장 중 오류 발생: {e}")
 
 def init_system() -> None:
-    """시스템을 초기화합니다. ChromaDB와 Ollama LLM을 설정합니다."""
-    global collection, client, embedding_function, llm, chain   
+    """시스템을 초기화하고, 설치된 모든 모델에 대해 분석을 실행합니다."""
+    global collection, client, embedding_function, llm, chain
     
     try:
         # 로깅 시스템 설정
         setup_logging()
-        
+        start_time = time.time()
         logger.info("시스템 초기화 시작")
         
-        # ChromaDB 초기화
-        logger.info("ChromaDB 클라이언트 및 임베딩 함수 초기화")
-        print("1. ChromaDB 클라이언트 및 임베딩 함수 초기화")
-        
+        # 임베딩 함수 초기화 (공통)
+        logger.info("임베딩 함수 초기화")
+        print("1. 임베딩 함수 초기화")
         try:
             embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
                 model_name="Linq-AI-Research/Linq-Embed-Mistral"
@@ -449,32 +480,16 @@ def init_system() -> None:
             log_exception(e, "임베딩 함수 초기화 실패")
             print(f"임베딩 함수 초기화 실패: {e}")
             raise
-        
-        # ChromaDB 설정
-        try:
-            client = chromadb.PersistentClient(path="./chroma_db_origin")
-            collection = client.get_or_create_collection(name="email_data")
-            logger.info("ChromaDB 컬렉션이 성공적으로 초기화되었습니다.")
-        except Exception as e:
-            log_exception(e, "ChromaDB 초기화 실패")
-            print(f"ChromaDB 초기화 실패: {e}")
-            raise
-        
-        # Ollama 모델 선택
-        logger.info("Ollama 모델 선택 중")
-        print("2. Ollama 모델 선택")
-        selected_model = choose_ollama_model()
-        
-        # Ollama LLM 초기화
-        try:
-            llm = OllamaLLM(model=selected_model)
-            logger.info(f"Ollama LLM이 초기화되었습니다. 모델: {selected_model}")
-        except Exception as e:
-            log_exception(e, "Ollama LLM 초기화 실패")
-            print(f"Ollama LLM 초기화 실패: {e}")
-            raise
-        
-        # LLM 체인 설정
+            
+        # 설치된 모든 Ollama 모델 가져오기
+        logger.info("Ollama 모델 목록을 가져오는 중...")
+        models = get_ollama_models()
+        if not models:
+            logger.error("Ollama 모델을 찾을 수 없습니다. 분석을 중단합니다.")
+            print("Ollama 모델을 찾을 수 없습니다. 분석을 중단합니다.")
+            return
+
+        # LLM 체인 템플릿 설정 (공통)
         template = """You are a spam email classifier. Analyze the provided similar emails and the target email to make your decision.
 
         Similar emails from database:
@@ -483,62 +498,111 @@ def init_system() -> None:
         Rules:
         - If you find emails with identical/very similar subjects, follow the majority classification among those examples
         - Prioritize consistency for similar cases
-        - Respond with: classification,reliability
-        - Classification: True (spam) or False (not spam)
+        - **STRICTLY FOLLOW THE OUTPUT FORMAT - NO EXCEPTIONS**
+        - **Do not include any explanations, reasoning, or additional text**
+        - **Output ONLY the required format: classification,reliability**
+        - Classification: True (spam) or False (not spam)  
         - Reliability: Confidence level as a percentage with one decimal place (e.g., 95.5%)
 
-        Format: True,85.2 or False,92.5
+        **MANDATORY Result Format: True,85.2 or False,92.5**
+        **Any deviation from this exact format will be considered incorrect**
         """
-        
         prompt = PromptTemplate(template=template, input_variables=["message"])
-        chain = prompt | llm
+
+        # 각 모델에 대해 분석 실행
+        for model_info in models:
+            selected_model = model_info['name']
+            model_filename = selected_model.replace(":", "_").replace("/", "_")
+            
+            logger.info(f"===== 모델: {selected_model} 분석 시작 =====")
+            print(f"\n===== 모델: {selected_model} 분석 시작 =====")
+
+            try:
+                # 모델별 ChromaDB 설정
+                db_path = f"./chroma_db_{model_filename}"
+                logger.info(f"ChromaDB 초기화 (경로: {db_path}")
+                try:
+                    client = chromadb.PersistentClient(path=db_path)
+                    collection = client.get_or_create_collection(
+                        name="email_data",
+                        embedding_function=embedding_function
+                    )
+                    logger.info("ChromaDB 컬렉션이 성공적으로 초기화되었습니다.")
+                except Exception as e:
+                    log_exception(e, f"ChromaDB 초기화 실패 (모델: {selected_model})")
+                    print(f"ChromaDB 초기화 실패: {e}")
+                    raise
+
+                # Ollama LLM 및 체인 초기화
+                llm = OllamaLLM(model=selected_model)
+                chain = prompt | llm
+                logger.info(f"Ollama LLM 및 체인이 초기화되었습니다. 모델: {selected_model}")
+
+                # 이메일 분석 실행
+                logger.info(f"이메일 스팸 분석 1차 프로세스 시작 (모델: {selected_model})")
+                
+                start_time = time.time()
+                result_data = ollama_low_analysis()
+                end_time = time.time()
+                
+                execution_time = end_time - start_time
+                hours, remainder = divmod(execution_time, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                
+                time_str = f"{int(hours)}시간 {int(minutes)}분 {int(seconds)}초"
+                logger.info(f"1차 분석 완료 (모델: {selected_model}). 소요 시간: {time_str}")
+                print(f"\n1차 분석 완료 (모델: {selected_model}). 소요 시간: {time_str}")
+
+                # 결과 저장 (모델 이름 포함)
+                save_result(result_data, f"spam_analysis_{model_filename}_first_results.json")
+
+                logger.info(f"이메일 스팸 분석 2차 프로세스 시작 (모델: {selected_model})")
+                
+                start_time = time.time()
+                result_data = ollama_low_analysis()
+                end_time = time.time()
+                
+                execution_time = end_time - start_time
+                hours, remainder = divmod(execution_time, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                
+                time_str = f"{int(hours)}시간 {int(minutes)}분 {int(seconds)}초"
+                logger.info(f"2차 분석 완료 (모델: {selected_model}). 소요 시간: {time_str}")
+                print(f"\n2차 분석 완료 (모델: {selected_model}). 소요 시간: {time_str}")
+
+                # 결과 저장 (모델 이름 포함)
+                save_result(result_data, f"spam_analysis_{model_filename}_second_results.json")
+
+            except Exception as e:
+                log_exception(e, f"모델 {selected_model} 처리 중 오류 발생")
+                print(f"\n모델 {selected_model} 처리 중 오류가 발생했습니다. 다음 모델로 넘어갑니다.")
+                continue
         
-        logger.info("LLM 체인이 설정되었습니다.")
-        logger.info("시스템 초기화가 완료되었습니다.")
-        print("시스템 초기화가 완료되었습니다.")
-        
+        end_time = time.time()
+        total_execution_time = end_time - start_time
+        hours, remainder = divmod(total_execution_time, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        logger.info(f"모든 모델에 대한 분석이 완료되었습니다. 소요 시간: {hours}시간 {minutes}분 {seconds}초")
+        print(f"\n모든 모델에 대한 분석이 완료되었습니다. 소요 시간: {hours}시간 {minutes}분 {seconds}초")
+
     except Exception as e:
-        log_exception(e, "시스템 초기화 중 오류 발생")
-        print(f"시스템 초기화 중 오류 발생: {e}")
+        log_exception(e, "시스템 초기화 및 분석 중 치명적인 오류 발생")
+        print(f"시스템 초기화 및 분석 중 치명적인 오류가 발생했습니다: {e}")
         raise
 
 def main() -> None:
-    """메인 함수: 시스템을 초기화하고 이메일 분석을 실행합니다."""
+    """메인 함수: 시스템을 초기화하고 모든 모델에 대해 이메일 분석을 실행합니다."""
     try:
-        # 시스템 초기화
+        # 시스템 초기화 및 전체 분석 실행
         init_system()
-        
-        # 이메일 분석 실행
-        logger.info("이메일 스팸 분석 프로세스 시작")
-        print("\n이메일 스팸 분석 시작")
-        
-        # 시작 시간 기록
-        start_time = time.time()
-        
-        # 분석 실행
-        result_data = ollama_low_analysis()
-        
-        # 종료 시간 및 소요 시간 계산
-        end_time = time.time()
-        execution_time = end_time - start_time
-        hours, remainder = divmod(execution_time, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        
-        logger.info(f"분석 완료. 소요 시간: {int(hours)}시간 {int(minutes)}분 {int(seconds)}초")
-        print(f"\n분석 완료. 소요 시간: {int(hours)}시간 {int(minutes)}분 {int(seconds)}초")
-        
-        # 결과 저장
-        save_result(result_data, "spam_analysis_results.json")
-        
-        logger.info("프로그램 정상 종료")
-        print("\n분석이 완료되었습니다.")
         
     except KeyboardInterrupt:
         logger.warning("사용자에 의해 프로그램이 중단되었습니다.")
         print("\n\n프로그램이 사용자에 의해 중단되었습니다.")
     except Exception as e:
+        # init_system에서 이미 로깅되었을 수 있지만, 만약을 위해 여기서도 로깅
         log_exception(e, "프로그램 실행 중 예기치 않은 오류 발생")
-        print(f"\n\n프로그램 실행 중 오류가 발생했습니다: {e}")
+        print(f"\n\n프로그램 실행 중 오류가 발생했습니다.")
         print("자세한 오류 내용은 로그 파일을 확인하세요.")
     finally:
         # 종료 메시지

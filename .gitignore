@@ -181,6 +181,7 @@ whitelist.conf
 chroma_db/*
 <<<<<<< HEAD
 chroma_db_origin/chroma.sqlite3
+chroma_db_*/*
 saveData/*
 mailData/*
 logs/*
