@@ -23,7 +23,6 @@ DEFAULT_DB_PATH = "email_analysis.db"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-
 def setup_logging(log_file: Optional[str] = None, log_level: int = logging.INFO) -> None:
     """로깅 설정을 초기화합니다.
     
@@ -45,7 +44,6 @@ def setup_logging(log_file: Optional[str] = None, log_level: int = logging.INFO)
         logging.getLogger('').addHandler(file_handler)
     
     logging.info(f"로깅 설정 완료. 레벨: {logging.getLevelName(log_level)}")
-
 
 def parse_arguments() -> argparse.Namespace:
     """명령줄 인자를 파싱합니다.
@@ -91,7 +89,6 @@ def parse_arguments() -> argparse.Namespace:
     
     return parser.parse_args()
 
-
 def extract_model_info(file_name: str) -> Optional[Dict[str, str]]:
     """파일명에서 모델명과 분석 유형을 추출합니다.
     
@@ -133,7 +130,6 @@ def extract_model_info(file_name: str) -> Optional[Dict[str, str]]:
     
     return None
 
-
 def scan_result_files(result_dir: str) -> List[Dict[str, Any]]:
     """결과 디렉토리에서 모든 JSON 파일을 스캔하고 메타데이터를 추출합니다.
     
@@ -169,7 +165,6 @@ def scan_result_files(result_dir: str) -> List[Dict[str, Any]]:
     logging.info(f"{len(file_infos)}개의 유효한 파일을 찾았습니다.")
     
     return file_infos
-
 
 def create_database_schema(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
     """데이터베이스 스키마를 생성합니다.
@@ -262,7 +257,6 @@ def create_database_schema(db_path: str, model_infos: List[Dict[str, Any]]) -> N
             except:
                 pass
         raise
-
 
 def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int, int]:
     """JSON 파일에서 데이터를 읽어 데이터베이스에 삽입합니다.
@@ -404,7 +398,6 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
             conn.close()
         raise
 
-
 def insert_all_data(db_path: str, file_infos: List[Dict[str, Any]]) -> Tuple[int, int, int]:
     """모든 JSON 파일의 데이터를 데이터베이스에 삽입합니다.
     
@@ -437,7 +430,6 @@ def insert_all_data(db_path: str, file_infos: List[Dict[str, Any]]) -> Tuple[int
     
     logging.info(f"전체 데이터 삽입 완료: 성공 {success_count}개, 실패 {error_count}개, 총 {total_emails}개 이메일, {total_results}개 분석 결과")
     return success_count, error_count, total_emails
-
 
 def create_views(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
     """데이터베이스 뷰를 생성합니다.
@@ -548,6 +540,47 @@ def create_views(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
                 pass
         raise
 
+def convert_json_to_sqlite(input_dir: str, output_db: str, overwrite: bool = False) -> bool:
+    """
+    JSON 파일들을 SQLite DB로 변환하는 메인 함수
+    
+    Args:
+        input_dir: JSON 파일이 있는 디렉토리 경로
+        output_db: 출력할 SQLite 데이터베이스 파일 경로
+        overwrite: 기존 DB 파일 덮어쓰기 여부
+        
+    Returns:
+        bool: 변환 성공 여부
+    """
+    try:
+        # 로깅 설정 (모듈 사용 시 간소화)
+        logging.basicConfig(level=logging.INFO, 
+                          format="%(levelname)s - %(message)s")
+        
+        # 기존 DB 파일 처리
+        if os.path.exists(output_db) and not overwrite:
+            logging.warning(f"데이터베이스 파일이 이미 존재합니다: {output_db}")
+            return False
+        elif os.path.exists(output_db) and overwrite:
+            os.remove(output_db)
+        
+        # 파일 스캔 및 변환 실행
+        file_infos = scan_result_files(input_dir)
+        if not file_infos:
+            logging.warning("변환할 유효한 파일이 없습니다.")
+            return False
+        
+        # 데이터베이스 생성 및 데이터 삽입
+        create_database_schema(output_db, file_infos)
+        success_count, error_count, total_emails = insert_all_data(output_db, file_infos)
+        create_views(output_db, file_infos)
+        
+        logging.info(f"변환 완료: {success_count}개 성공, {error_count}개 실패, {total_emails}개 이메일")
+        return True
+        
+    except Exception as e:
+        logging.error(f"변환 중 오류 발생: {str(e)}")
+        return False
 
 def main() -> int:
     """메인 프로그램 함수입니다.
@@ -607,7 +640,6 @@ def main() -> int:
         logging.error(f"변환 작업 중 오류가 발생했습니다: {str(e)}")
         logging.debug("상세 오류 정보:", exc_info=True)
         return 1
-
 
 if __name__ == "__main__":
     exit_code = main()

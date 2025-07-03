@@ -1,4 +1,5 @@
 import json, os, chromadb, time, re, requests, logging, datetime, traceback
+import db_sqlite_converter
 from typing import List, Union
 from pathlib import Path
 from collections import defaultdict
@@ -458,6 +459,35 @@ def save_result(result_data: dict, filename: str) -> None:
         log_exception(e, "결과 저장 중 오류 발생")
         print(f"결과 저장 중 오류 발생: {e}")
 
+def convert_all_results_to_db() -> None:
+    """results 디렉토리의 모든 JSON 파일을 SQLite DB로 변환"""
+    current_dir = os.path.dirname(__file__)
+    results_dir = os.path.join(current_dir, "results")
+    db_path = os.path.join(current_dir, "../email_analysis.db")
+    
+    if not os.path.exists(results_dir):
+        logger.warning("results 디렉토리가 존재하지 않습니다.")
+        return
+    
+    try:
+        logger.info("JSON 파일을 SQLite DB로 변환 중...")
+        success = db_sqlite_converter.convert_json_to_sqlite(
+            input_dir=results_dir,
+            output_db=db_path,
+            overwrite=True
+        )
+        
+        if success:
+            logger.info(f"DB 변환 완료: {db_path}")
+            print(f"SQLite 데이터베이스가 생성되었습니다: {db_path}")
+        else:
+            logger.error("DB 변환 실패")
+            print("DB 변환 중 오류가 발생했습니다.")
+            
+    except Exception as e:
+        log_exception(e, "DB 변환 중 오류 발생")
+        print(f"DB 변환 중 오류가 발생했습니다: {e}")
+
 def init_system() -> None:
     """시스템을 초기화하고, 설치된 모든 모델에 대해 분석을 실행합니다."""
     global collection, client, embedding_function, llm, chain
@@ -519,7 +549,7 @@ def init_system() -> None:
 
             try:
                 # 모델별 ChromaDB 설정
-                db_path = f"./chroma_db_{model_filename}"
+                db_path = f"../vectorDB/chroma_db_{model_filename}"
                 logger.info(f"ChromaDB 초기화 (경로: {db_path}")
                 try:
                     client = chromadb.PersistentClient(path=db_path)
@@ -584,6 +614,22 @@ def init_system() -> None:
         minutes, seconds = divmod(remainder, 60)
         logger.info(f"모든 모델에 대한 분석이 완료되었습니다. 소요 시간: {hours}시간 {minutes}분 {seconds}초")
         print(f"\n모든 모델에 대한 분석이 완료되었습니다. 소요 시간: {hours}시간 {minutes}분 {seconds}초")
+
+        # 모든 모델 분석 완료 후 DB 변환 실행
+        try:
+            logger.info("===== 모든 모델 분석 완료 =====")
+            logger.info("SQLite 데이터베이스 변환을 시작합니다...")
+            print(f"\n===== 모든 모델 분석 완료 =====")
+            print("SQLite 데이터베이스 변환을 시작합니다...")
+            
+            convert_all_results_to_db()
+            
+            logger.info("전체 프로세스가 완료되었습니다.")
+            print("전체 프로세스가 완료되었습니다.")
+            
+        except Exception as e:
+            log_exception(e, "DB 변환 중 오류 발생")
+            print("DB 변환 중 오류가 발생했지만 JSON 파일은 정상적으로 저장되었습니다.")
 
     except Exception as e:
         log_exception(e, "시스템 초기화 및 분석 중 치명적인 오류 발생")
