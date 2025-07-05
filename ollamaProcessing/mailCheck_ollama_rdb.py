@@ -1,4 +1,5 @@
-import json, os, chromadb, time, re, requests, logging, datetime, traceback
+# -*- coding: utf-8 -*-
+import json, os, chromadb, time, re, requests, logging, datetime, traceback, sys
 import db_sqlite_converter
 from typing import List, Union
 from pathlib import Path
@@ -24,6 +25,9 @@ from ollama._types import ResponseError
 버전:
     RDB - ChromaDB를 사용한 검색 기능 강화 버전
 """
+
+# 현재 파일의 디렉토리(ollamaProcessing)의 부모 디렉토리(프로젝트 루트)를 경로에 추가
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 # 전역 변수 초기화
 collection = None
@@ -253,46 +257,46 @@ def ollama_low_analysis() -> dict:
     
     for year, year_data in file_list['files_by_year'].items():
         # 임시로 2000년대만 처리
-        if year == '2004':
-            total_year_count = year_data['count']
-            logger.info(f"{year}년 데이터 처리 시작 (총 {total_year_count}개 파일)")
-            print(f"\n=== {year}년 처리 중 ===")
-            print(f"파일 개수: {total_year_count}")
-            
-            processed_year_count = 0
-            for i, file_path in enumerate(year_data['files'], 1):
-                try:
-                    # 파일 처리
-                    file_data = mail_json_convert_dict(file_path)
-                    if not file_data:
-                        logger.warning(f"파일을 처리할 수 없습니다: {file_path}")
-                        continue
-                    
-                    # 스팸 분석
-                    start_time = time.time()
-                    is_spam, reliability_score = check_spam(file_data)
-                    end_time = time.time()
-                    processing_time = round(end_time - start_time, 1)
-                    
-                    # 데이터 업데이트
-                    file_data["spam"] = is_spam
-                    file_data["duration"] = processing_time
-                    file_data["reliability"] = reliability_score
-
-                    # 결과 데이터 저장
-                    result_data[year].append(file_data)
-                    processed_year_count += 1
-                    total_processed += 1
-                    
-                    # 진행 상황 표시
-                    # progress = (i / total_year_count) * 100
-                    # print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{total_year_count})", end='')
-                
-                except Exception as e:
-                    log_exception(e, f"파일 처리 중 오류 발생: {file_path}")
+        # if year == '2004':
+        total_year_count = year_data['count']
+        logger.info(f"{year}년 데이터 처리 시작 (총 {total_year_count}개 파일)")
+        print(f"\n=== {year}년 처리 중 ===")
+        print(f"파일 개수: {total_year_count}")
+        
+        processed_year_count = 0
+        for i, file_path in enumerate(year_data['files'], 1):
+            try:
+                # 파일 처리
+                file_data = mail_json_convert_dict(file_path)
+                if not file_data:
+                    logger.warning(f"파일을 처리할 수 없습니다: {file_path}")
                     continue
                 
-                logger.info(f"{year}년 데이터 처리 완료: {processed_year_count}/{total_year_count} 파일 처리됨, 처리시간: {processing_time}초")    
+                # 스팸 분석
+                start_time = time.time()
+                is_spam, reliability_score = check_spam(file_data)
+                end_time = time.time()
+                processing_time = round(end_time - start_time, 1)
+                
+                # 데이터 업데이트
+                file_data["spam"] = is_spam
+                file_data["duration"] = processing_time
+                file_data["reliability"] = reliability_score
+
+                # 결과 데이터 저장
+                result_data[year].append(file_data)
+                processed_year_count += 1
+                total_processed += 1
+                
+                # 진행 상황 표시
+                # progress = (i / total_year_count) * 100
+                # print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{total_year_count})", end='')
+            
+            except Exception as e:
+                log_exception(e, f"파일 처리 중 오류 발생: {file_path}")
+                continue
+            
+            logger.info(f"{year}년 데이터 처리 완료: {processed_year_count}/{total_year_count} 파일 처리됨, 처리시간: {processing_time}초")    
     
     # 처리 완료 메시지
     logger.info(f"모든 이메일 분석이 완료되었습니다. 총 {total_processed}/{total_files} 파일 처리됨")
