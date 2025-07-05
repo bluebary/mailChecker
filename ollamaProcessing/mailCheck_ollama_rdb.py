@@ -45,8 +45,8 @@ def setup_logging() -> None:
     """
     global logger
     
-    # 로그 디렉토리 생성
-    log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+    # 로그 디렉토리 생성 (상위 폴더에)
+    log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
     os.makedirs(log_dir, exist_ok=True)
     
     # 현재 날짜와 시간을 파일명에 포함
@@ -431,8 +431,8 @@ def save_result(result_data: dict, filename: str) -> None:
     try:
         current_dir = os.path.dirname(__file__)
         if os.path.exists(current_dir):
-            # 결과 디렉토리 생성
-            results_dir = os.path.join(current_dir, "results")
+            # 결과 디렉토리 생성 (상위 폴더에)
+            results_dir = os.path.join(current_dir, "..", "results")
             os.makedirs(results_dir, exist_ok=True)
             
             # 타임스탬프 추가
@@ -466,7 +466,7 @@ def save_result(result_data: dict, filename: str) -> None:
 def convert_all_results_to_db() -> None:
     """results 디렉토리의 모든 JSON 파일을 SQLite DB로 변환"""
     current_dir = os.path.dirname(__file__)
-    results_dir = os.path.join(current_dir, "results")
+    results_dir = os.path.join(current_dir, "..", "results")
     db_path = os.path.join(current_dir, "../email_analysis.db")
     
     if not os.path.exists(results_dir):
