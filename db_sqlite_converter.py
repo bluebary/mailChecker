@@ -15,6 +15,7 @@ import glob
 import sqlite3
 import logging
 import argparse
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 # 상수 정의
@@ -134,6 +135,7 @@ def scan_result_files(result_dir: str) -> List[Dict[str, Any]]:
     """결과 디렉토리에서 모든 JSON 파일을 스캔하고 메타데이터를 추출합니다.
     
     주어진 디렉토리에서 JSON 파일을 찾고, 파일명에서 모델 정보를 추출합니다.
+    'saveData' 디렉토리의 경우 재귀적으로 탐색합니다.
     
     Args:
         result_dir: 결과 파일이 저장된 디렉토리 경로
@@ -142,28 +144,40 @@ def scan_result_files(result_dir: str) -> List[Dict[str, Any]]:
         List[Dict[str, Any]]: 파일 메타데이터 목록 (파일 경로, 모델명, 분석 유형 등)
     """
     file_infos = []
-    json_files = glob.glob(os.path.join(result_dir, "*.json"))
     
-    logging.info(f"{len(json_files)}개의 JSON 파일을 발견했습니다.")
+    # 'results' 디렉토리 처리
+    if os.path.basename(result_dir) == 'results':
+        json_files = glob.glob(os.path.join(result_dir, "*.json"))
+        logging.info(f"'results' 디렉토리에서 {len(json_files)}개의 JSON 파일을 발견했습니다.")
+        for file_path in json_files:
+            file_name = os.path.basename(file_path)
+            model_info = extract_model_info(file_name)
+            if model_info:
+                file_infos.append({
+                    "path": file_path,
+                    "model": model_info["model"],
+                    "analysis_type": model_info["type"],
+                    "date": model_info["date"],
+                    "is_result_file": True
+                })
+            else:
+                logging.warning(f"'results' 디렉토리의 파일명 형식이 일치하지 않습니다: {file_name}")
     
-    for file_path in json_files:
-        file_name = os.path.basename(file_path)
-        # 파일명에서 모델명과 분석 유형을 추출
-        model_info = extract_model_info(file_name)
-        if model_info:
-            file_info = {
+    # 'saveData' 디렉토리 처리 (재귀적 탐색)
+    save_data_dir = os.path.join(os.path.dirname(result_dir), 'saveData')
+    if os.path.isdir(save_data_dir):
+        json_files = glob.glob(os.path.join(save_data_dir, "**", "*.json"), recursive=True)
+        logging.info(f"'saveData' 디렉토리에서 {len(json_files)}개의 JSON 파일을 발견했습니다.")
+        for file_path in json_files:
+            file_infos.append({
                 "path": file_path,
-                "model": model_info["model"],
-                "analysis_type": model_info["type"],
-                "date": model_info["date"]
-            }
-            file_infos.append(file_info)
-            logging.debug(f"파일 정보 추출: {file_info}")
-        else:
-            logging.warning(f"파일명 형식이 일치하지 않습니다: {file_name}")
-    
-    logging.info(f"{len(file_infos)}개의 유효한 파일을 찾았습니다.")
-    
+                "model": "N/A",
+                "analysis_type": "N/A",
+                "date": None,
+                "is_result_file": False
+            })
+
+    logging.info(f"총 {len(file_infos)}개의 유효한 파일을 찾았습니다.")
     return file_infos
 
 def create_database_schema(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
@@ -201,7 +215,8 @@ def create_database_schema(db_path: str, model_infos: List[Dict[str, Any]]) -> N
             sender TEXT,
             sender_domain TEXT,
             receiver TEXT,
-            subject TEXT
+            subject TEXT,
+            receive_date DATETIME
         )
         """)
         
@@ -281,58 +296,89 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
         
         with open(file_info["path"], 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
-        model_name = file_info['model'].replace('-', '_')
-        model = file_info['model']
-        analysis_type = file_info['analysis_type']  # 'first' 또는 'second'
-        
+
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         conn.execute("BEGIN TRANSACTION")
-        
+
         email_count = 0
         model_result_count = 0
-        
-        # 데이터 순회 및 삽입
-        for year, emails in data.items():
-            if not isinstance(emails, list):
-                logging.warning(f"{year} 데이터가 리스트 형식이 아닙니다. 스킵합니다.")
+
+        is_result_file = file_info.get("is_result_file", False)
+
+        # 'results' 파일은 연도별로 그룹화되어 있고, 'saveData' 파일은 단일 이메일 객체
+        emails_to_process = []
+        if is_result_file:
+            for year, emails in data.items():
+                if isinstance(emails, list):
+                    emails_to_process.extend(emails)
+                else:
+                    logging.warning(f"{year} 데이터가 리스트 형식이 아닙니다. 스킵합니다.")
+        else: # saveData 파일
+            if isinstance(data, dict):
+                emails_to_process.append(data)
+
+        for email in emails_to_process:
+            if not isinstance(email, dict) or ('id' not in email and 'message-id' not in email):
+                logging.warning("유효하지 않은 이메일 데이터를 발견했습니다. 스킵합니다.")
                 continue
-            for email in emails:
-                if not isinstance(email, dict) or 'id' not in email:
-                    logging.warning("유효하지 않은 이메일 데이터를 발견했습니다. 스킵합니다.")
-                    continue
-                email_id = email.get('id')
-                if not email_id:
-                    logging.warning("이메일 ID가 없는 데이터를 발견했습니다. 스킵합니다.")
-                    continue
+            
+            email_id = email.get('id') or email.get('message-id')
+            if not email_id:
+                logging.warning("이메일 ID가 없는 데이터를 발견했습니다. 스킵합니다.")
+                continue
+
+            # 날짜 파싱
+            date_str = email.get('parsed_date') or email.get('date')
+            receive_date = None
+            if date_str:
+                try:
+                    if 'T' in date_str:
+                        receive_date = datetime.fromisoformat(date_str.replace('T', ' '))
+                    else:
+                        # 타임존 정보가 있는 복잡한 날짜 형식 처리
+                        # 예: "Mon, 31 Dec 1979 16:00:00 -0800 (PST)"
+                        # 마지막 괄호 안의 타임존 약어는 strptime으로 직접 처리하기 어려움
+                        # 따라서 괄호 부분을 제거하고 처리
+                        date_str_cleaned = re.sub(r'\s*\([^)]*\)$', '', date_str)
+                        try:
+                            receive_date = datetime.strptime(date_str_cleaned, '%a, %d %b %Y %H:%M:%S %z')
+                        except ValueError:
+                             receive_date = datetime.strptime(date_str_cleaned, '%a, %d %b %Y %H:%M:%S')
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"날짜 변환 실패: {date_str}, 오류: {e}")
+
+            # 이메일 기본 정보 삽입 (UPSERT)
+            cursor.execute("""
+            INSERT INTO emails (id, sender, sender_domain, receiver, subject, receive_date)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                sender = COALESCE(excluded.sender, sender),
+                sender_domain = COALESCE(excluded.sender_domain, sender_domain),
+                receiver = COALESCE(excluded.receiver, receiver),
+                subject = COALESCE(excluded.subject, subject),
+                receive_date = COALESCE(excluded.receive_date, receive_date)
+            """, (
+                email_id,
+                email.get('from') or email.get('sender'),
+                email.get('sender_domain'),
+                email.get('to') or email.get('receiver'),
+                email.get('subject'),
+                receive_date
+            ))
+            email_count += 1
+
+            if is_result_file:
+                model_name = file_info['model'].replace('-', '_')
+                model = file_info['model']
+                analysis_type = file_info['analysis_type']
                 
-                # 이메일 기본 정보 삽입 (UPSERT)
-                cursor.execute("""
-                INSERT INTO emails (id, sender, sender_domain, receiver, subject)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (id) DO UPDATE SET
-                    sender = COALESCE(excluded.sender, sender),
-                    sender_domain = COALESCE(excluded.sender_domain, sender_domain),
-                    receiver = COALESCE(excluded.receiver, receiver),
-                    subject = COALESCE(excluded.subject, subject)
-                """, (
-                    email_id,
-                    email.get('sender'),
-                    email.get('sender_domain'),
-                    email.get('receiver'),
-                    email.get('subject')
-                ))
-                email_count += 1
-                
-                # 모델별 테이블 및 all_results 테이블에 분석 결과 삽입
                 human_verified_spam = email.get('human_verified_spam')
                 spam = email.get('spam')
                 duration = email.get('duration')
                 reliability = email.get('reliability')
 
                 if analysis_type == 'first':
-                    # 모델별 테이블 업데이트
                     cursor.execute(f"""
                     INSERT INTO {model_name} (id, first_spam, first_duration, first_reliability, human_verified_spam)
                     VALUES (?, ?, ?, ?, ?)
@@ -343,7 +389,6 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
                         human_verified_spam=COALESCE(excluded.human_verified_spam, {model_name}.human_verified_spam)
                     """, (email_id, spam, duration, reliability, human_verified_spam))
                     
-                    # all_results 테이블 업데이트
                     cursor.execute("""
                     INSERT INTO all_results (id, model, first_spam, first_duration, first_reliability, human_verified_spam)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -355,7 +400,6 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
                     """, (email_id, model, spam, duration, reliability, human_verified_spam))
 
                 elif analysis_type == 'second':
-                    # 모델별 테이블 업데이트
                     cursor.execute(f"""
                     INSERT INTO {model_name} (id, second_spam, second_duration, second_reliability, human_verified_spam)
                     VALUES (?, ?, ?, ?, ?)
@@ -366,7 +410,6 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
                         human_verified_spam=COALESCE(excluded.human_verified_spam, {model_name}.human_verified_spam)
                     """, (email_id, spam, duration, reliability, human_verified_spam))
 
-                    # all_results 테이블 업데이트
                     cursor.execute("""
                     INSERT INTO all_results (id, model, second_spam, second_duration, second_reliability, human_verified_spam)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -376,7 +419,7 @@ def insert_data_from_json(db_path: str, file_info: Dict[str, Any]) -> Tuple[int,
                         second_reliability=COALESCE(excluded.second_reliability, all_results.second_reliability),
                         human_verified_spam=COALESCE(excluded.human_verified_spam, all_results.human_verified_spam)
                     """, (email_id, model, spam, duration, reliability, human_verified_spam))
-
+                
                 model_result_count += 1
         conn.commit()
         conn.close()
@@ -467,6 +510,7 @@ def create_views(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
                 e.sender_domain,
                 e.receiver,
                 e.subject,
+                e.receive_date,
                 m.first_spam,
                 m.first_duration,
                 m.first_reliability,
@@ -486,7 +530,7 @@ def create_views(db_path: str, model_infos: List[Dict[str, Any]]) -> None:
         cursor.execute("""
         CREATE VIEW IF NOT EXISTS all_results_view AS
         SELECT 
-            e.id, e.sender, e.sender_domain, e.receiver, e.subject, 
+            e.id, e.sender, e.sender_domain, e.receiver, e.subject, e.receive_date,
             r.model, r.first_spam, r.first_duration, r.first_reliability, 
             r.second_spam, r.second_duration, r.second_reliability, r.human_verified_spam
         FROM 

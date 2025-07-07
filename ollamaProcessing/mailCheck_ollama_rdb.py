@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import json, os, chromadb, time, re, requests, logging, datetime, traceback, sys
+import json, os, chromadb, time, re, requests, logging, datetime, traceback, sys, argparse
 import db_sqlite_converter
 from typing import List, Union
 from pathlib import Path
@@ -237,11 +237,15 @@ def mail_json_convert_dict(file_path: str) -> dict:
         print(f"JSON 파일 변환 중 오류 발생: {e}")
         return {}
 
-def ollama_low_analysis() -> dict:
+def ollama_low_analysis(debug_year: str = "") -> dict:
     """Ollama 모델을 사용하여 모든 이메일의 스팸 여부를 분석합니다.
     
     mail_json_list.json 파일에서 이메일 목록을 읽어와 각 이메일을 분석하고,
     결과를 연도별로 정리하여 반환합니다.
+    
+    Args:
+        debug_year (str, optional): 특정 연도만 처리하기 위한 디버그용 연도. 
+                                    기본값은 ""이며, 모든 연도를 처리합니다.
     """
     result_data = defaultdict(list)
     root_path = "/home/sound/mailChecker/mail_json_list.json"
@@ -256,8 +260,9 @@ def ollama_low_analysis() -> dict:
     logger.info(f"총 분석 대상 파일 수: {total_files}")
     
     for year, year_data in file_list['files_by_year'].items():
-        # 임시로 2000년대만 처리
-        # if year == '2004':
+        if debug_year and year != debug_year:
+            continue
+            
         total_year_count = year_data['count']
         logger.info(f"{year}년 데이터 처리 시작 (총 {total_year_count}개 파일)")
         print(f"\n=== {year}년 처리 중 ===")
@@ -288,10 +293,6 @@ def ollama_low_analysis() -> dict:
                 processed_year_count += 1
                 total_processed += 1
                 
-                # 진행 상황 표시
-                # progress = (i / total_year_count) * 100
-                # print(f"\r진행률: [{('=' * int(progress/2)).ljust(50)}] {progress:.1f}% ({i}/{total_year_count})", end='')
-            
             except Exception as e:
                 log_exception(e, f"파일 처리 중 오류 발생: {file_path}")
                 continue
@@ -492,7 +493,7 @@ def convert_all_results_to_db() -> None:
         log_exception(e, "DB 변환 중 오류 발생")
         print(f"DB 변환 중 오류가 발생했습니다: {e}")
 
-def init_system() -> None:
+def init_system(debug_year: str = "") -> None:
     """시스템을 초기화하고, 설치된 모든 모델에 대해 분석을 실행합니다."""
     global collection, client, embedding_function, llm, chain
     
@@ -576,7 +577,7 @@ def init_system() -> None:
                 logger.info(f"이메일 스팸 분석 1차 프로세스 시작 (모델: {selected_model})")
                 
                 start_time = time.time()
-                result_data = ollama_low_analysis()
+                result_data = ollama_low_analysis(debug_year=debug_year)
                 end_time = time.time()
                 
                 execution_time = end_time - start_time
@@ -593,7 +594,7 @@ def init_system() -> None:
                 logger.info(f"이메일 스팸 분석 2차 프로세스 시작 (모델: {selected_model})")
                 
                 start_time = time.time()
-                result_data = ollama_low_analysis()
+                result_data = ollama_low_analysis(debug_year=debug_year)
                 end_time = time.time()
                 
                 execution_time = end_time - start_time
@@ -643,8 +644,12 @@ def init_system() -> None:
 def main() -> None:
     """메인 함수: 시스템을 초기화하고 모든 모델에 대해 이메일 분석을 실행합니다."""
     try:
+        parser = argparse.ArgumentParser(description="Ollama를 이용한 이메일 스팸 분석 시스템")
+        parser.add_argument("--debug", type=str, default="", help="특정 연도만 처리하기 위한 디버그용 연도")
+        args = parser.parse_args()
+        
         # 시스템 초기화 및 전체 분석 실행
-        init_system()
+        init_system(debug_year=args.debug)
         
     except KeyboardInterrupt:
         logger.warning("사용자에 의해 프로그램이 중단되었습니다.")
