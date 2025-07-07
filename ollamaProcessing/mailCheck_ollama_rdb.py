@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import json, os, chromadb, time, re, requests, logging, datetime, traceback, sys, argparse
+# 현재 파일의 디렉토리(ollamaProcessing)의 부모 디렉토리(프로젝트 루트)를 경로에 추가
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import db_sqlite_converter
 from typing import List, Union
 from pathlib import Path
@@ -25,9 +27,6 @@ from ollama._types import ResponseError
 버전:
     RDB - ChromaDB를 사용한 검색 기능 강화 버전
 """
-
-# 현재 파일의 디렉토리(ollamaProcessing)의 부모 디렉토리(프로젝트 루트)를 경로에 추가
-sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 # 전역 변수 초기화
 collection = None
